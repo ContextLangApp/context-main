@@ -8,14 +8,22 @@ class HomePage extends StatelessWidget {
     return Scaffold(
       backgroundColor: const Color(0xFFEFF3F7),
       body: SafeArea(
-        child: Column(
-          children: [
-            _TopBar(),
-            const SizedBox(height: 16),
-            _DateLabel(),
-            const SizedBox(height: 12),
-            _LessonCard(),
-          ],
+        child: SingleChildScrollView(
+          child: Column(
+            children: [
+              _TopBar(),
+              const SizedBox(height: 16),
+              _DateLabel(),
+              const SizedBox(height: 12),
+              _LessonCard(),
+              const SizedBox(height: 24),
+              _LockedCard(),
+              const SizedBox(height: 24),
+              _LockedCard(),
+              const SizedBox(height: 24),
+              _LockedCard(),
+            ],
+          ),
         ),
       ),
     );
@@ -141,6 +149,21 @@ class _LessonCard extends StatelessWidget {
           ],
         ),
       ),
+    );
+  }
+}
+
+class _LockedCard extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: 80,
+      height: 80,
+      decoration: BoxDecoration(
+        color: const Color(0xFFDDE3EA),
+        borderRadius: BorderRadius.circular(20),
+      ),
+      child: const Icon(Icons.lock, color: Color(0xFF9AA5B4), size: 32),
     );
   }
 }
