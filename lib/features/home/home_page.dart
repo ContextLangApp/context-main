@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 
 class HomePage extends StatelessWidget {
   const HomePage({super.key});
@@ -43,6 +44,16 @@ class _TopBar extends StatelessWidget {
           const SizedBox(width: 8),
           _StatChip(emoji: '⭐', value: 0, color: const Color(0xFFFFCC00)),
           const Spacer(),
+          GestureDetector(
+            onTap: () async {
+              await Supabase.instance.client.auth.signOut();
+            },
+            child: const Icon(
+              Icons.emoji_events_outlined,
+              color: Color(0xFFFF2D55),
+              size: 28,
+            ),
+          ),
           const Icon(
             Icons.emoji_events_outlined,
             color: Color(0xFFFF2D55),
