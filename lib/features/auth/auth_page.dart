@@ -2,7 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 class AuthPage extends StatefulWidget {
-  const AuthPage({super.key});
+  final bool initialIsLogin;
+
+  const AuthPage({super.key, this.initialIsLogin = true});
 
   @override
   State<AuthPage> createState() => _AuthPageState();
@@ -13,6 +15,12 @@ class _AuthPageState extends State<AuthPage> {
   final _passwordController = TextEditingController();
   bool _isLoading = false;
   bool _isLogin = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _isLogin = widget.initialIsLogin;
+  }
 
   @override
   void dispose() {

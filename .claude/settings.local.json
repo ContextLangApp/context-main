@@ -1,7 +1,13 @@
 {
   "permissions": {
     "allow": [
-      "Bash(flutter run *)"
+      "Bash(flutter run *)",
+      "Bash(Get-ChildItem -Path \"C:\\\\Projects\\\\Context\\\\context-main\\\\lib\" -Recurse -File -Filter \"*.dart\")",
+      "Bash(Select-Object -ExpandProperty FullName)",
+      "Bash(flutter pub *)",
+      "Bash(flutter analyze *)",
+      "Bash(New-Item *)",
+      "PowerShell(New-Item *)"
     ]
   }
 }

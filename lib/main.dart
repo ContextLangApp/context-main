@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'features/home/home_page.dart';
-import 'features/auth/auth_page.dart';
+import 'features/welcome/welcome_page.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -44,7 +44,7 @@ class _RootPageState extends State<_RootPage> {
         if (snapshot.hasData && snapshot.data!.session != null) {
           return const MainShell();
         }
-        return const AuthPage();
+        return const WelcomePage();
       },
     );
   }
