@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:video_player/video_player.dart';
 import '../auth/auth_page.dart';
 
@@ -37,6 +38,7 @@ class _WelcomePageState extends State<WelcomePage> {
   late VideoPlayerController _videoController;
   final PageController _pageController = PageController();
   int _currentPage = 0;
+  bool _showSignUp = false;
 
   @override
   void initState() {
@@ -71,14 +73,27 @@ class _WelcomePageState extends State<WelcomePage> {
           Container(color: Colors.black.withValues(alpha: 0.45)),
           SafeArea(
             child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Spacer(),
-                _buildCarousel(),
-                const SizedBox(height: 16),
-                _PageIndicator(
-                  count: _features.length,
-                  currentIndex: _currentPage,
+                AnimatedSwitcher(
+                  duration: const Duration(milliseconds: 250),
+                  child: _showSignUp
+                      ? IconButton(
+                          key: const ValueKey('back'),
+                          icon: const Icon(Icons.arrow_back, color: Colors.white),
+                          onPressed: () => setState(() => _showSignUp = false),
+                        )
+                      : const SizedBox(key: ValueKey('no-back')),
                 ),
+                const Spacer(),
+                if (!_showSignUp) ...[
+                  _buildCarousel(),
+                  const SizedBox(height: 16),
+                  _PageIndicator(
+                    count: _features.length,
+                    currentIndex: _currentPage,
+                  ),
+                ],
                 const Spacer(),
                 _buildButtons(),
                 const SizedBox(height: 32),
@@ -112,6 +127,21 @@ class _WelcomePageState extends State<WelcomePage> {
     );
   }
 
+  Future<void> _signInWithGoogle() async {
+    try {
+      await Supabase.instance.client.auth.signInWithOAuth(
+        OAuthProvider.google,
+        redirectTo: 'io.supabase.context://login-callback/',
+      );
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(e.toString())),
+        );
+      }
+    }
+  }
+
   Widget _buildCarousel() {
     return SizedBox(
       height: 220,
@@ -127,44 +157,121 @@ class _WelcomePageState extends State<WelcomePage> {
   Widget _buildButtons() {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 24),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          ElevatedButton(
-            onPressed: () => Navigator.push(
-              context,
-              MaterialPageRoute(
-                builder: (_) => const AuthPage(initialIsLogin: false),
-              ),
-            ),
-            style: ElevatedButton.styleFrom(
-              backgroundColor: const Color(0xFF8B5CF6),
-              foregroundColor: Colors.white,
-              padding: const EdgeInsets.symmetric(vertical: 16),
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(12),
-              ),
-            ),
-            child: const Text(
-              'Get Started',
-              style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-            ),
-          ),
-          const SizedBox(height: 12),
-          TextButton(
-            onPressed: () => Navigator.push(
-              context,
-              MaterialPageRoute(
-                builder: (_) => const AuthPage(initialIsLogin: true),
-              ),
-            ),
-            child: const Text(
-              'I already have an account',
-              style: TextStyle(color: Colors.white70, fontSize: 15),
-            ),
-          ),
-        ],
+      child: AnimatedSwitcher(
+        duration: const Duration(milliseconds: 300),
+        child: _showSignUp ? _buildSignUpButtons() : _buildWelcomeButtons(),
       ),
+    );
+  }
+
+  Widget _buildWelcomeButtons() {
+    return Column(
+      key: const ValueKey('welcome-buttons'),
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        ElevatedButton(
+          onPressed: () => setState(() => _showSignUp = true),
+          style: ElevatedButton.styleFrom(
+            backgroundColor: const Color(0xFF8B5CF6),
+            foregroundColor: Colors.white,
+            padding: const EdgeInsets.symmetric(vertical: 16),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+            ),
+          ),
+          child: const Text(
+            'Get Started',
+            style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+          ),
+        ),
+        const SizedBox(height: 12),
+        TextButton(
+          onPressed: () => Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (_) => const AuthPage(initialIsLogin: true),
+            ),
+          ),
+          child: const Text(
+            'I already have an account',
+            style: TextStyle(color: Colors.white70, fontSize: 15),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildSignUpButtons() {
+    return Column(
+      key: const ValueKey('signup-buttons'),
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        const Text(
+          'Create Your Account',
+          style: TextStyle(
+            color: Colors.white,
+            fontSize: 22,
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+        const SizedBox(height: 16),
+        ElevatedButton(
+          onPressed: _signInWithGoogle,
+          style: ElevatedButton.styleFrom(
+            backgroundColor: Colors.white,
+            foregroundColor: Colors.black87,
+            padding: const EdgeInsets.symmetric(vertical: 14),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+            ),
+            alignment: Alignment.centerLeft,
+          ),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 4),
+            child: Row(
+              children: [
+                const _GoogleIcon(),
+                const SizedBox(width: 12),
+                const Text(
+                  'Continue with Google',
+                  style: TextStyle(fontSize: 15, fontWeight: FontWeight.w500),
+                ),
+              ],
+            ),
+          ),
+        ),
+        const SizedBox(height: 12),
+        ElevatedButton(
+          onPressed: () => Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (_) => const AuthPage(initialIsLogin: false),
+            ),
+          ),
+          style: ElevatedButton.styleFrom(
+            backgroundColor: const Color(0xFF8B5CF6),
+            foregroundColor: Colors.white,
+            padding: const EdgeInsets.symmetric(vertical: 14),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+            ),
+            alignment: Alignment.centerLeft,
+          ),
+          child: const Padding(
+            padding: EdgeInsets.symmetric(horizontal: 4),
+            child: Row(
+              children: [
+                Icon(Icons.mail_outline, size: 20),
+                SizedBox(width: 12),
+                Text(
+                  'Continue with Email',
+                  style: TextStyle(fontSize: 15, fontWeight: FontWeight.w500),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ],
     );
   }
 }
@@ -209,6 +316,32 @@ class _FeatureCard extends StatelessWidget {
               ),
             ),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+class _GoogleIcon extends StatelessWidget {
+  const _GoogleIcon();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: 20,
+      height: 20,
+      decoration: const BoxDecoration(
+        color: Color(0xFF4285F4),
+        shape: BoxShape.circle,
+      ),
+      alignment: Alignment.center,
+      child: const Text(
+        'G',
+        style: TextStyle(
+          color: Colors.white,
+          fontSize: 13,
+          fontWeight: FontWeight.bold,
+          height: 1,
         ),
       ),
     );
