@@ -55,7 +55,7 @@ class _TopBar extends StatelessWidget {
             ),
           ),
           const Icon(
-            Icons.emoji_events_outlined,
+            Icons.notifications_outlined,
             color: Color(0xFFFF2D55),
             size: 28,
           ),

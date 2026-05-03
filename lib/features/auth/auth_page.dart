@@ -14,6 +14,13 @@ class _AuthPageState extends State<AuthPage> {
   bool _isLoading = false;
   bool _isLogin = true;
 
+  @override
+  void dispose() {
+    _emailController.dispose();
+    _passwordController.dispose();
+    super.dispose();
+  }
+
   Future<void> _authenticate() async {
     setState(() => _isLoading = true);
     try {
@@ -29,11 +36,13 @@ class _AuthPageState extends State<AuthPage> {
         );
       }
     } catch (e) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text(e.toString())));
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(e.toString())));
+      }
     }
-    setState(() => _isLoading = false);
+    if (mounted) setState(() => _isLoading = false);
   }
 
   @override
