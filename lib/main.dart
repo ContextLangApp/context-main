@@ -1,6 +1,9 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'features/home/home_page.dart';
+import 'features/onboarding/onboarding_flow.dart';
 import 'features/welcome/welcome_page.dart';
 
 void main() async {
@@ -36,17 +39,77 @@ class _RootPage extends StatefulWidget {
 }
 
 class _RootPageState extends State<_RootPage> {
+  late final StreamSubscription<AuthState> _authSub;
+  Session? _session;
+  bool _checkingProfile = false;
+  bool _showOnboarding = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _authSub = Supabase.instance.client.auth.onAuthStateChange.listen((data) {
+      final event = data.event;
+      final newSession = data.session;
+
+      setState(() {
+        _session = newSession;
+        if (newSession == null) {
+          _checkingProfile = false;
+          _showOnboarding = false;
+        }
+      });
+
+      // Only check profile on a fresh sign-in, not on app restart (initialSession).
+      if (newSession != null && event == AuthChangeEvent.signedIn) {
+        _checkProfile();
+      }
+    });
+  }
+
+  Future<void> _checkProfile() async {
+    setState(() => _checkingProfile = true);
+    try {
+      final userId = Supabase.instance.client.auth.currentUser?.id;
+      if (userId == null) return;
+      final result = await Supabase.instance.client
+          .from('profiles')
+          .select('id')
+          .eq('id', userId)
+          .maybeSingle();
+      if (mounted) setState(() => _showOnboarding = result == null);
+    } catch (_) {
+      if (mounted) setState(() => _showOnboarding = false);
+    } finally {
+      if (mounted) setState(() => _checkingProfile = false);
+    }
+  }
+
+  @override
+  void dispose() {
+    _authSub.cancel();
+    super.dispose();
+  }
+
   @override
   Widget build(BuildContext context) {
-    return StreamBuilder<AuthState>(
-      stream: Supabase.instance.client.auth.onAuthStateChange,
-      builder: (context, snapshot) {
-        if (snapshot.hasData && snapshot.data!.session != null) {
-          return const MainShell();
-        }
-        return const WelcomePage();
-      },
-    );
+    if (_session == null) return const WelcomePage();
+
+    if (_checkingProfile) {
+      return const Scaffold(
+        backgroundColor: Color(0xFFEFF3F7),
+        body: Center(
+          child: CircularProgressIndicator(color: Color(0xFF8B5CF6)),
+        ),
+      );
+    }
+
+    if (_showOnboarding) {
+      return OnboardingFlow(
+        onComplete: () => setState(() => _showOnboarding = false),
+      );
+    }
+
+    return const MainShell();
   }
 }
 
