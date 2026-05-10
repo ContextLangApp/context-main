@@ -23,7 +23,7 @@ flutter analyze
 
 ## Architecture
 
-**Language learning app** ("Context") built with Flutter + Supabase. Early-stage — most features are stubs.
+**AI-Integrated German language learning app** ("Context") built with Flutter + Supabase. Early-stage — most features are stubs.
 
 ### Auth flow
 `main.dart` initializes Supabase, then `_RootPage` listens to `supabase.auth.onAuthStateChange` (a stream). Authenticated users go to `MainShell`; unauthenticated users go to `WelcomePage`. No manual session checks needed — the stream handles transitions automatically.

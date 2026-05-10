@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../article_reader/article_reader_page.dart';
+
 class HomePage extends StatelessWidget {
   const HomePage({super.key});
 
@@ -147,7 +149,11 @@ class _LessonCard extends StatelessWidget {
             ),
             const Spacer(),
             ElevatedButton(
-              onPressed: () {},
+              onPressed: () => Navigator.of(context).push(
+                MaterialPageRoute(
+                  builder: (_) => const ArticleReaderPage(),
+                ),
+              ),
               style: ElevatedButton.styleFrom(
                 backgroundColor: Colors.white,
                 foregroundColor: const Color(0xFF8B5CF6),
