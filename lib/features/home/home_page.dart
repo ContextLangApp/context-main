@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../article_reader/article_reader_page.dart';
+import '../scenario_conversation/scenario_conversation_page.dart';
 import '../speak_practice/speak_practice_page.dart';
 
 class HomePage extends StatelessWidget {
@@ -22,6 +23,8 @@ class HomePage extends StatelessWidget {
               _LessonCard(),
               const SizedBox(height: 24),
               _SecondLessonCard(),
+              const SizedBox(height: 24),
+              _ScenarioConversationCard(),
               const SizedBox(height: 24),
               _LockedCard(),
               const SizedBox(height: 24),
@@ -153,9 +156,7 @@ class _LessonCard extends StatelessWidget {
             const Spacer(),
             ElevatedButton(
               onPressed: () => Navigator.of(context).push(
-                MaterialPageRoute(
-                  builder: (_) => const ArticleReaderPage(),
-                ),
+                MaterialPageRoute(builder: (_) => const ArticleReaderPage()),
               ),
               style: ElevatedButton.styleFrom(
                 backgroundColor: Colors.white,
@@ -209,9 +210,7 @@ class _SecondLessonCard extends StatelessWidget {
             const Spacer(),
             ElevatedButton(
               onPressed: () => Navigator.of(context).push(
-                MaterialPageRoute(
-                  builder: (_) => const SpeakPracticePage(),
-                ),
+                MaterialPageRoute(builder: (_) => const SpeakPracticePage()),
               ),
               style: ElevatedButton.styleFrom(
                 backgroundColor: Colors.white,
@@ -221,6 +220,62 @@ class _SecondLessonCard extends StatelessWidget {
                 ),
               ),
               child: const Text('Start Speaking'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _ScenarioConversationCard extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16),
+      child: Container(
+        width: double.infinity,
+        height: 200,
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(24),
+          gradient: const LinearGradient(
+            colors: [Color(0xFF8B5CF6), Color(0xFFEC4899)],
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+          ),
+        ),
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Conversation Scenario',
+              style: TextStyle(
+                color: Colors.white,
+                fontSize: 22,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            const SizedBox(height: 8),
+            const Text(
+              'Practice a real restaurant conversation in German.',
+              style: TextStyle(color: Colors.white70, fontSize: 14),
+            ),
+            const Spacer(),
+            ElevatedButton(
+              onPressed: () => Navigator.of(context).push(
+                MaterialPageRoute(
+                  builder: (_) => const ScenarioConversationPage(),
+                ),
+              ),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.white,
+                foregroundColor: const Color(0xFF8B5CF6),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(20),
+                ),
+              ),
+              child: const Text('Start Scenario'),
             ),
           ],
         ),
