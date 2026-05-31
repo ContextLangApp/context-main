@@ -1,8 +1,11 @@
-import 'package:flutter/material.dart';
-import 'package:flutter_tts/flutter_tts.dart';
-import 'package:speech_to_text/speech_to_text.dart';
+import 'dart:io';
+import 'dart:typed_data';
 
-import '../../services/gemini_service.dart';
+import 'package:audioplayers/audioplayers.dart';
+import 'package:flutter/material.dart';
+import 'package:record/record.dart';
+
+import '../../services/azure_conversation_service.dart';
 
 const String _initialWaiterMessage =
     'Guten Tag! Willkommen in unserem Restaurant. Möchten Sie schon etwas bestellen?';
@@ -25,150 +28,121 @@ class ScenarioConversationPage extends StatefulWidget {
 }
 
 class _ScenarioConversationPageState extends State<ScenarioConversationPage> {
-  final SpeechToText _speech = SpeechToText();
-  final FlutterTts _tts = FlutterTts();
-  final GeminiService _geminiService = GeminiService();
+  final AudioRecorder _recorder = AudioRecorder();
+  final AudioPlayer _player = AudioPlayer();
+  final AzureConversationService _azure = AzureConversationService();
   final ScrollController _scrollController = ScrollController();
 
   final List<_ScenarioMessage> _messages = [];
 
-  bool _speechAvailable = false;
-  bool _isListening = false;
+  bool _isRecording = false;
   bool _loadingResponse = false;
-  bool _hasSubmittedCurrentTranscript = false;
-  String _localeId = 'de_DE';
-  String _currentTranscript = '';
   String? _tip;
   String? _errorText;
+  Uint8List? _lastTtsBytes;
 
   @override
   void initState() {
     super.initState();
-    _initSpeech();
-    _initTts();
     _resetScenario(speak: true);
   }
 
-  Future<void> _initSpeech() async {
-    final available = await _speech.initialize(
-      onStatus: _onSpeechStatus,
-      onError: (error) {
-        if (mounted) setState(() => _isListening = false);
-      },
-    );
-    if (!mounted) return;
+  Future<void> _toggleRecording() async {
+    if (_loadingResponse) return;
 
-    if (!available) {
-      setState(() {
-        _speechAvailable = false;
-        _errorText = 'Speech recognition is not available on this device.';
-      });
+    if (_isRecording) {
+      setState(() => _isRecording = false);
+      final path = await _recorder.stop();
+      if (path == null) return;
+      final bytes = await File(path).readAsBytes();
+      if (bytes.isNotEmpty) await _submitAudio(bytes);
       return;
     }
 
-    final locales = await _speech.locales();
-    LocaleName? selectedLocale;
-    for (final locale in locales) {
-      if (locale.localeId == 'de_DE') {
-        selectedLocale = locale;
-        break;
+    final hasPermission = await _recorder.hasPermission();
+    if (!hasPermission) {
+      if (mounted) {
+        setState(() => _errorText = 'Microphone permission denied.');
       }
-    }
-    selectedLocale ??= locales
-        .where((locale) => locale.localeId.startsWith('de'))
-        .cast<LocaleName?>()
-        .firstWhere((locale) => locale != null, orElse: () => null);
-    selectedLocale ??= locales.isNotEmpty ? locales.first : null;
-
-    if (!mounted) return;
-    setState(() {
-      _speechAvailable = true;
-      _localeId = selectedLocale?.localeId ?? 'de_DE';
-    });
-  }
-
-  Future<void> _initTts() async {
-    await _tts.setLanguage('de-DE');
-    await _tts.setSpeechRate(0.45);
-  }
-
-  void _onSpeechStatus(String status) {
-    if (status == 'done' || status == 'notListening') {
-      if (!mounted) return;
-      setState(() => _isListening = false);
-      final transcript = _currentTranscript.trim();
-      if (transcript.isNotEmpty && !_hasSubmittedCurrentTranscript) {
-        _hasSubmittedCurrentTranscript = true;
-        _submitTranscript(transcript);
-      }
-    }
-  }
-
-  Future<void> _toggleListening() async {
-    if (!_speechAvailable || _loadingResponse) return;
-
-    if (_isListening) {
-      await _speech.stop();
-      if (mounted) setState(() => _isListening = false);
       return;
     }
 
+    if (!mounted) return;
     setState(() {
-      _currentTranscript = '';
-      _hasSubmittedCurrentTranscript = false;
+      _isRecording = true;
       _errorText = null;
-      _isListening = true;
-    });
-
-    await _speech.listen(
-      onResult: (result) {
-        if (mounted) {
-          setState(() => _currentTranscript = result.recognizedWords);
-        }
-      },
-      listenOptions: SpeechListenOptions(
-        localeId: _localeId,
-        listenFor: const Duration(seconds: 60),
-        pauseFor: const Duration(seconds: 3),
-      ),
-    );
-  }
-
-  Future<void> _submitTranscript(String transcript) async {
-    setState(() {
-      _messages.add(
-        _ScenarioMessage(role: _ScenarioRole.user, text: transcript),
-      );
-      _loadingResponse = true;
       _tip = null;
-      _errorText = null;
-      _currentTranscript = '';
-      _hasSubmittedCurrentTranscript = true;
     });
-    _scrollToBottom();
+
+    final tempPath = '${Directory.systemTemp.path}/scenario_recording.wav';
+    await _recorder.start(
+      const RecordConfig(
+        encoder: AudioEncoder.wav,
+        sampleRate: 16000,
+        numChannels: 1,
+      ),
+      path: tempPath,
+    );
+  }
+
+  Future<void> _submitAudio(Uint8List bytes) async {
+    setState(() => _loadingResponse = true);
 
     try {
-      final reply = await _geminiService.getScenarioConversationReply(
-        conversationHistory: _conversationHistory,
-        userMessage: transcript,
+      final transcript = await _azure.transcribeAudio(bytes);
+      if (!mounted) return;
+
+      if (transcript.trim().isEmpty) {
+        setState(() {
+          _loadingResponse = false;
+          _errorText = "Couldn't understand — please try again.";
+        });
+        return;
+      }
+
+      setState(() {
+        _messages.add(
+          _ScenarioMessage(role: _ScenarioRole.user, text: transcript),
+        );
+        _tip = null;
+        _errorText = null;
+      });
+      _scrollToBottom();
+
+      final historyForService = _messages
+          .sublist(0, _messages.length - 1)
+          .map(
+            (m) => (
+              role: m.role == _ScenarioRole.waiter ? 'waiter' : 'user',
+              text: m.text,
+            ),
+          )
+          .toList();
+
+      final reply = await _azure.chat(
+        history: historyForService,
+        latestUserMessage: transcript,
       );
       if (!mounted) return;
 
-      final waiterResponse = reply.waiterResponse.trim();
+      final waiterResponse = reply.waiterResponse.trim().isEmpty
+          ? 'Entschuldigung, könnten Sie das bitte wiederholen?'
+          : reply.waiterResponse.trim();
+
       setState(() {
         _messages.add(
-          _ScenarioMessage(
-            role: _ScenarioRole.waiter,
-            text: waiterResponse.isEmpty
-                ? 'Entschuldigung, könnten Sie das bitte wiederholen?'
-                : waiterResponse,
-          ),
+          _ScenarioMessage(role: _ScenarioRole.waiter, text: waiterResponse),
         );
         _tip = reply.tip.trim().isEmpty ? null : reply.tip.trim();
-        _loadingResponse = false;
       });
       _scrollToBottom();
-      await _speakLatestWaiterMessage();
+
+      final audioBytes = await _azure.synthesizeSpeech(waiterResponse);
+      if (!mounted) return;
+
+      _lastTtsBytes = audioBytes;
+      setState(() => _loadingResponse = false);
+      await _playAudioBytes(audioBytes);
     } catch (e) {
       if (!mounted) return;
       setState(() {
@@ -178,15 +152,40 @@ class _ScenarioConversationPageState extends State<ScenarioConversationPage> {
     }
   }
 
-  String get _conversationHistory {
-    return _messages
-        .map((message) {
-          final speaker = message.role == _ScenarioRole.waiter
-              ? 'Waiter'
-              : 'Learner';
-          return '$speaker: ${message.text}';
-        })
-        .join('\n');
+  Future<void> _playAudioBytes(Uint8List bytes) async {
+    final tempFile = File('${Directory.systemTemp.path}/tts_output.mp3');
+    await tempFile.writeAsBytes(bytes);
+    await _player.stop();
+    await _player.play(DeviceFileSource(tempFile.path));
+  }
+
+  Future<void> _speakLatestWaiterMessage() async {
+    if (_lastTtsBytes != null) {
+      await _playAudioBytes(_lastTtsBytes!);
+      return;
+    }
+    final text = _latestWaiterMessage;
+    if (text == null) return;
+    try {
+      final bytes = await _azure.synthesizeSpeech(text);
+      if (!mounted) return;
+      _lastTtsBytes = bytes;
+      await _playAudioBytes(bytes);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _errorText = 'Could not play audio: $e');
+    }
+  }
+
+  Future<void> _speakInitialMessage() async {
+    try {
+      final bytes = await _azure.synthesizeSpeech(_initialWaiterMessage);
+      if (!mounted) return;
+      _lastTtsBytes = bytes;
+      await _playAudioBytes(bytes);
+    } catch (_) {
+      // non-fatal: user can tap Repeat Waiter to retry
+    }
   }
 
   String? get _latestWaiterMessage {
@@ -196,20 +195,10 @@ class _ScenarioConversationPageState extends State<ScenarioConversationPage> {
     return null;
   }
 
-  Future<void> _speak(String text) async {
-    await _tts.stop();
-    await _tts.speak(text);
-  }
-
-  Future<void> _speakLatestWaiterMessage() async {
-    final text = _latestWaiterMessage;
-    if (text != null && text.isNotEmpty) {
-      await _speak(text);
-    }
-  }
-
   Future<void> _resetScenario({bool speak = false}) async {
-    if (_isListening) await _speech.stop();
+    if (_isRecording) await _recorder.stop();
+    await _player.stop();
+
     setState(() {
       _messages
         ..clear()
@@ -219,15 +208,15 @@ class _ScenarioConversationPageState extends State<ScenarioConversationPage> {
             text: _initialWaiterMessage,
           ),
         );
-      _currentTranscript = '';
-      _hasSubmittedCurrentTranscript = false;
+      _isRecording = false;
+      _loadingResponse = false;
       _tip = null;
       _errorText = null;
-      _isListening = false;
-      _loadingResponse = false;
+      _lastTtsBytes = null;
     });
     _scrollToBottom();
-    if (speak) await _speak(_initialWaiterMessage);
+
+    if (speak) _speakInitialMessage();
   }
 
   void _scrollToBottom() {
@@ -243,8 +232,8 @@ class _ScenarioConversationPageState extends State<ScenarioConversationPage> {
 
   @override
   void dispose() {
-    _speech.stop();
-    _tts.stop();
+    _recorder.dispose();
+    _player.dispose();
     _scrollController.dispose();
     super.dispose();
   }
@@ -269,7 +258,7 @@ class _ScenarioConversationPageState extends State<ScenarioConversationPage> {
                     _ChatCard(
                       messages: _messages,
                       loadingResponse: _loadingResponse,
-                      transcript: _currentTranscript,
+                      isRecording: _isRecording,
                     ),
                     if (_tip != null) ...[
                       const SizedBox(height: 16),
@@ -284,10 +273,9 @@ class _ScenarioConversationPageState extends State<ScenarioConversationPage> {
               ),
             ),
             _BottomControls(
-              speechAvailable: _speechAvailable,
-              isListening: _isListening,
+              isRecording: _isRecording,
               loadingResponse: _loadingResponse,
-              onMicPressed: _toggleListening,
+              onMicPressed: _toggleRecording,
               onRepeatPressed: _speakLatestWaiterMessage,
               onClearPressed: () => _resetScenario(speak: true),
             ),
@@ -400,12 +388,12 @@ class _RoleChip extends StatelessWidget {
 class _ChatCard extends StatelessWidget {
   final List<_ScenarioMessage> messages;
   final bool loadingResponse;
-  final String transcript;
+  final bool isRecording;
 
   const _ChatCard({
     required this.messages,
     required this.loadingResponse,
-    required this.transcript,
+    required this.isRecording,
   });
 
   @override
@@ -424,8 +412,8 @@ class _ChatCard extends StatelessWidget {
             _MessageBubble(message: message),
             const SizedBox(height: 12),
           ],
-          if (transcript.isNotEmpty) ...[
-            _LiveTranscriptBubble(text: transcript),
+          if (isRecording) ...[
+            const _RecordingBubble(),
             const SizedBox(height: 12),
           ],
           if (loadingResponse)
@@ -478,10 +466,8 @@ class _MessageBubble extends StatelessWidget {
   }
 }
 
-class _LiveTranscriptBubble extends StatelessWidget {
-  final String text;
-
-  const _LiveTranscriptBubble({required this.text});
+class _RecordingBubble extends StatelessWidget {
+  const _RecordingBubble();
 
   @override
   Widget build(BuildContext context) {
@@ -496,9 +482,9 @@ class _LiveTranscriptBubble extends StatelessWidget {
           color: const Color(0xFFB8C4E0),
           borderRadius: BorderRadius.circular(18),
         ),
-        child: Text(
-          text,
-          style: const TextStyle(
+        child: const Text(
+          '● Recording...',
+          style: TextStyle(
             color: Colors.white,
             fontSize: 15,
             height: 1.45,
@@ -583,16 +569,14 @@ class _ErrorCard extends StatelessWidget {
 }
 
 class _BottomControls extends StatelessWidget {
-  final bool speechAvailable;
-  final bool isListening;
+  final bool isRecording;
   final bool loadingResponse;
   final VoidCallback onMicPressed;
   final VoidCallback onRepeatPressed;
   final VoidCallback onClearPressed;
 
   const _BottomControls({
-    required this.speechAvailable,
-    required this.isListening,
+    required this.isRecording,
     required this.loadingResponse,
     required this.onMicPressed,
     required this.onRepeatPressed,
@@ -601,7 +585,7 @@ class _BottomControls extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final micEnabled = speechAvailable && !loadingResponse;
+    final micEnabled = !loadingResponse;
     return Container(
       padding: const EdgeInsets.fromLTRB(16, 8, 16, 28),
       color: const Color(0xFFEFF3F7),
@@ -609,8 +593,8 @@ class _BottomControls extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         children: [
           Text(
-            isListening
-                ? 'Listening...'
+            isRecording
+                ? 'Recording...'
                 : loadingResponse
                 ? 'Waiter is replying...'
                 : 'Tap to speak',
@@ -624,18 +608,18 @@ class _BottomControls extends StatelessWidget {
               height: 72,
               decoration: BoxDecoration(
                 shape: BoxShape.circle,
-                gradient: isListening
+                gradient: isRecording
                     ? const LinearGradient(
                         colors: [Color(0xFF8B5CF6), Color(0xFFEC4899)],
                         begin: Alignment.topLeft,
                         end: Alignment.bottomRight,
                       )
                     : null,
-                color: isListening ? null : const Color(0xFFDDE3EA),
+                color: isRecording ? null : const Color(0xFFDDE3EA),
               ),
               child: Icon(
-                isListening ? Icons.stop : Icons.mic,
-                color: isListening ? Colors.white : Colors.black54,
+                isRecording ? Icons.stop : Icons.mic,
+                color: isRecording ? Colors.white : Colors.black54,
                 size: 36,
               ),
             ),
