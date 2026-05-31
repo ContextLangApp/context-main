@@ -35,6 +35,7 @@ class _ScenarioConversationPageState extends State<ScenarioConversationPage> {
   bool _speechAvailable = false;
   bool _isListening = false;
   bool _loadingResponse = false;
+  bool _hasSubmittedCurrentTranscript = false;
   String _localeId = 'de_DE';
   String _currentTranscript = '';
   String? _tip;
@@ -96,7 +97,8 @@ class _ScenarioConversationPageState extends State<ScenarioConversationPage> {
       if (!mounted) return;
       setState(() => _isListening = false);
       final transcript = _currentTranscript.trim();
-      if (transcript.isNotEmpty) {
+      if (transcript.isNotEmpty && !_hasSubmittedCurrentTranscript) {
+        _hasSubmittedCurrentTranscript = true;
         _submitTranscript(transcript);
       }
     }
@@ -113,6 +115,7 @@ class _ScenarioConversationPageState extends State<ScenarioConversationPage> {
 
     setState(() {
       _currentTranscript = '';
+      _hasSubmittedCurrentTranscript = false;
       _errorText = null;
       _isListening = true;
     });
@@ -140,6 +143,7 @@ class _ScenarioConversationPageState extends State<ScenarioConversationPage> {
       _tip = null;
       _errorText = null;
       _currentTranscript = '';
+      _hasSubmittedCurrentTranscript = true;
     });
     _scrollToBottom();
 
@@ -216,6 +220,7 @@ class _ScenarioConversationPageState extends State<ScenarioConversationPage> {
           ),
         );
       _currentTranscript = '';
+      _hasSubmittedCurrentTranscript = false;
       _tip = null;
       _errorText = null;
       _isListening = false;
