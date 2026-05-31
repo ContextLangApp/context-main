@@ -10,11 +10,16 @@ serve(async (req) => {
     return new Response('ok', { headers: corsHeaders })
   }
 
+  const requestId = crypto.randomUUID()
+  console.log(`[azure-tts][${requestId}] start method=${req.method} contentType=${req.headers.get('content-type')} contentLength=${req.headers.get('content-length')}`)
+
   try {
     const speechKey = Deno.env.get('AZURE_SPEECH_KEY')
     const speechRegion = Deno.env.get('AZURE_SPEECH_REGION')
+    console.log(`[azure-tts][${requestId}] env speechKeyPresent=${Boolean(speechKey)} speechRegion=${speechRegion ?? 'missing'}`)
 
     if (!speechKey || !speechRegion) {
+      console.error(`[azure-tts][${requestId}] missing Azure Speech credentials`)
       return new Response(
         JSON.stringify({ error: 'Azure Speech credentials not configured' }),
         { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
@@ -22,8 +27,10 @@ serve(async (req) => {
     }
 
     const { text } = await req.json()
+    console.log(`[azure-tts][${requestId}] parsed body textType=${typeof text} textLength=${typeof text === 'string' ? text.length : 0}`)
 
     if (!text || typeof text !== 'string' || text.trim().length === 0) {
+      console.error(`[azure-tts][${requestId}] missing text field`)
       return new Response(
         JSON.stringify({ error: 'text field is required' }),
         { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
@@ -50,13 +57,16 @@ serve(async (req) => {
       headers: {
         'Ocp-Apim-Subscription-Key': speechKey,
         'Content-Type': 'application/ssml+xml',
+        'User-Agent': 'ContextGermanLearningApp',
         'X-Microsoft-OutputFormat': 'audio-16khz-32kbitrate-mono-mp3',
       },
       body: ssml,
     })
+    console.log(`[azure-tts][${requestId}] azure response status=${response.status} contentType=${response.headers.get('content-type')}`)
 
     if (!response.ok) {
       const errorBody = await response.text()
+      console.error(`[azure-tts][${requestId}] azure error status=${response.status} body=${errorBody.slice(0, 1000)}`)
       return new Response(
         JSON.stringify({ error: `Azure TTS error ${response.status}: ${errorBody}` }),
         { status: 502, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
@@ -64,6 +74,7 @@ serve(async (req) => {
     }
 
     const audioBytes = await response.arrayBuffer()
+    console.log(`[azure-tts][${requestId}] success audioBytes=${audioBytes.byteLength}`)
 
     return new Response(audioBytes, {
       headers: {
@@ -72,6 +83,7 @@ serve(async (req) => {
       },
     })
   } catch (err) {
+    console.error(`[azure-tts][${requestId}] unhandled error ${String(err)}`)
     return new Response(JSON.stringify({ error: String(err) }), {
       status: 500,
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },

@@ -44,22 +44,53 @@ class _ScenarioConversationPageState extends State<ScenarioConversationPage> {
   @override
   void initState() {
     super.initState();
+    _log('initState: resetting scenario and requesting initial TTS');
     _resetScenario(speak: true);
   }
 
-  Future<void> _toggleRecording() async {
-    if (_loadingResponse) return;
+  void _log(String message) {
+    debugPrint('[ScenarioConversationPage] $message');
+  }
 
-    if (_isRecording) {
-      setState(() => _isRecording = false);
-      final path = await _recorder.stop();
-      if (path == null) return;
-      final bytes = await File(path).readAsBytes();
-      if (bytes.isNotEmpty) await _submitAudio(bytes);
+  String _bytesPreview(Uint8List bytes) {
+    return bytes
+        .take(12)
+        .map((byte) => byte.toRadixString(16).padLeft(2, '0'))
+        .join(' ');
+  }
+
+  Future<void> _toggleRecording() async {
+    if (_loadingResponse) {
+      _log('record toggle ignored: already waiting for response');
       return;
     }
 
+    if (_isRecording) {
+      _log('record stop requested');
+      setState(() => _isRecording = false);
+      final path = await _recorder.stop();
+      _log('record stop completed: path=$path');
+      if (path == null) {
+        _log('record stop returned null path');
+        return;
+      }
+      final file = File(path);
+      final exists = await file.exists();
+      final bytes = exists ? await file.readAsBytes() : Uint8List(0);
+      _log(
+        'record file: exists=$exists, bytes=${bytes.length}, prefix=${_bytesPreview(bytes)}',
+      );
+      if (bytes.isNotEmpty) {
+        await _submitAudio(bytes);
+      } else {
+        setState(() => _errorText = 'Recording produced no audio bytes.');
+      }
+      return;
+    }
+
+    _log('record permission check start');
     final hasPermission = await _recorder.hasPermission();
+    _log('record permission result: $hasPermission');
     if (!hasPermission) {
       if (mounted) {
         setState(() => _errorText = 'Microphone permission denied.');
@@ -75,6 +106,9 @@ class _ScenarioConversationPageState extends State<ScenarioConversationPage> {
     });
 
     final tempPath = '${Directory.systemTemp.path}/scenario_recording.wav';
+    _log(
+      'record start: path=$tempPath, encoder=wav, sampleRate=16000, channels=1',
+    );
     await _recorder.start(
       const RecordConfig(
         encoder: AudioEncoder.wav,
@@ -83,16 +117,21 @@ class _ScenarioConversationPageState extends State<ScenarioConversationPage> {
       ),
       path: tempPath,
     );
+    _log('record start completed');
   }
 
   Future<void> _submitAudio(Uint8List bytes) async {
+    _log('submit audio start: bytes=${bytes.length}');
     setState(() => _loadingResponse = true);
 
     try {
+      _log('stage STT start');
       final transcript = await _azure.transcribeAudio(bytes);
+      _log('stage STT done: transcriptLength=${transcript.length}');
       if (!mounted) return;
 
       if (transcript.trim().isEmpty) {
+        _log('stage STT empty transcript');
         setState(() {
           _loadingResponse = false;
           _errorText = "Couldn't understand — please try again.";
@@ -109,6 +148,7 @@ class _ScenarioConversationPageState extends State<ScenarioConversationPage> {
       });
       _scrollToBottom();
 
+      _log('stage chat start');
       final historyForService = _messages
           .sublist(0, _messages.length - 1)
           .map(
@@ -122,6 +162,9 @@ class _ScenarioConversationPageState extends State<ScenarioConversationPage> {
       final reply = await _azure.chat(
         history: historyForService,
         latestUserMessage: transcript,
+      );
+      _log(
+        'stage chat done: waiterLength=${reply.waiterResponse.length}, tipLength=${reply.tip.length}',
       );
       if (!mounted) return;
 
@@ -137,13 +180,20 @@ class _ScenarioConversationPageState extends State<ScenarioConversationPage> {
       });
       _scrollToBottom();
 
+      _log('stage TTS start');
       final audioBytes = await _azure.synthesizeSpeech(waiterResponse);
+      _log(
+        'stage TTS done: audioBytes=${audioBytes.length}, prefix=${_bytesPreview(audioBytes)}',
+      );
       if (!mounted) return;
 
       _lastTtsBytes = audioBytes;
       setState(() => _loadingResponse = false);
+      _log('stage playback start');
       await _playAudioBytes(audioBytes);
+      _log('stage playback requested');
     } catch (e) {
+      _log('submit audio error: $e');
       if (!mounted) return;
       setState(() {
         _errorText = 'Error: $e';
@@ -154,6 +204,9 @@ class _ScenarioConversationPageState extends State<ScenarioConversationPage> {
 
   Future<void> _playAudioBytes(Uint8List bytes) async {
     final tempFile = File('${Directory.systemTemp.path}/tts_output.mp3');
+    _log(
+      'play audio: writing temp file=${tempFile.path}, bytes=${bytes.length}, prefix=${_bytesPreview(bytes)}',
+    );
     await tempFile.writeAsBytes(bytes);
     await _player.stop();
     await _player.play(DeviceFileSource(tempFile.path));
@@ -161,17 +214,23 @@ class _ScenarioConversationPageState extends State<ScenarioConversationPage> {
 
   Future<void> _speakLatestWaiterMessage() async {
     if (_lastTtsBytes != null) {
+      _log('repeat waiter: using cached audio bytes=${_lastTtsBytes!.length}');
       await _playAudioBytes(_lastTtsBytes!);
       return;
     }
     final text = _latestWaiterMessage;
-    if (text == null) return;
+    if (text == null) {
+      _log('repeat waiter ignored: no waiter message');
+      return;
+    }
     try {
+      _log('repeat waiter: fetching TTS for latest waiter message');
       final bytes = await _azure.synthesizeSpeech(text);
       if (!mounted) return;
       _lastTtsBytes = bytes;
       await _playAudioBytes(bytes);
     } catch (e) {
+      _log('repeat waiter error: $e');
       if (!mounted) return;
       setState(() => _errorText = 'Could not play audio: $e');
     }
@@ -179,12 +238,16 @@ class _ScenarioConversationPageState extends State<ScenarioConversationPage> {
 
   Future<void> _speakInitialMessage() async {
     try {
+      _log('initial TTS start');
       final bytes = await _azure.synthesizeSpeech(_initialWaiterMessage);
+      _log('initial TTS done: bytes=${bytes.length}');
       if (!mounted) return;
       _lastTtsBytes = bytes;
       await _playAudioBytes(bytes);
-    } catch (_) {
-      // non-fatal: user can tap Repeat Waiter to retry
+    } catch (e) {
+      _log('initial TTS error: $e');
+      if (!mounted) return;
+      setState(() => _errorText = 'Initial waiter audio failed: $e');
     }
   }
 
@@ -196,6 +259,7 @@ class _ScenarioConversationPageState extends State<ScenarioConversationPage> {
   }
 
   Future<void> _resetScenario({bool speak = false}) async {
+    _log('reset scenario: speak=$speak, wasRecording=$_isRecording');
     if (_isRecording) await _recorder.stop();
     await _player.stop();
 
@@ -484,11 +548,7 @@ class _RecordingBubble extends StatelessWidget {
         ),
         child: const Text(
           '● Recording...',
-          style: TextStyle(
-            color: Colors.white,
-            fontSize: 15,
-            height: 1.45,
-          ),
+          style: TextStyle(color: Colors.white, fontSize: 15, height: 1.45),
         ),
       ),
     );
