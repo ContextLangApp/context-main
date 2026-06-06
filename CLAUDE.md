@@ -22,7 +22,7 @@ flutter analyze                                  # lint
 
 The profile check runs on both `signedIn` and `initialSession`, so interrupted onboarding resumes on restart.
 
-`MainShell` is a 4-tab bottom nav: **Home** (implemented), **Practice**, **Leagues**, **Profile** (all `Placeholder()`). Feature entry points currently live as cards on Home, not under the Practice tab.
+`MainShell` is a 4-tab bottom nav: **Home** and **Practice** (implemented), **Leagues**, **Profile** (still `Placeholder()`). The learning features are entered as cards on Home; the Practice tab is the saved-vocabulary Dictionary.
 
 ## Auth
 
@@ -41,18 +41,31 @@ lib/features/
   article_reader/          — shows a local article matched to the user's favorite_topics
   speak_practice/          — on-device speech_to_text → Gemini feedback
   scenario_conversation/   — record audio → Azure STT → chat → TTS playback
+  practice/                — Practice tab: saved-vocabulary Dictionary (list, delete, speaker)
 ```
+
+## Save Vocabulary
+
+Cross-cutting feature for capturing words from any learning content into a per-user dictionary:
+- `widgets/vocabulary_selectable_text.dart` — drop-in replacement for German `Text`; long-press a single word → "Save to Dictionary" toolbar action. Used in `article_reader` (body), `speak_practice` (transcript), `scenario_conversation` (both message bubbles). German content only; English tips/feedback stay plain `Text`.
+- `services/vocabulary_service.dart` — `saveVocabulary` (normalize → reject multi-word → dup-check → enrich → insert), `fetchSavedVocabulary`, `deleteVocabulary`.
+- `services/tts_playback_service.dart` — shared Azure TTS fetch + playback (extracted from `scenario_conversation`, which now uses it). Dictionary speaker button speaks `"word. example"`.
+- `supabase/functions/enrich-vocabulary` — Azure AI Foundry call returning meaning/pronunciation/example/usage as JSON.
+- `saved_vocabulary` table (`supabase/migrations/`): per-user words with `(user_id, normalized_word)` unique key and owner-only RLS.
 
 ## Services & AI backends
 
 Two parallel stacks (a known inconsistency worth consolidating):
 - `services/gemini_service.dart` — **direct client call** to Gemini for speak-practice feedback. Key via `--dart-define=GEMINI_API_KEY` (compiled into the build).
 - `services/azure_conversation_service.dart` — calls Supabase Edge Functions (`supabase/functions/azure-{stt,chat,tts}`) that hold the Azure keys server-side. Chat is Grok via Azure AI Foundry. Auth header uses the signed-in JWT, falling back to the anon key.
+- `supabase/functions/enrich-vocabulary` — Foundry call powering Save Vocabulary; invoked via `Supabase.functions.invoke` from `vocabulary_service.dart`.
+
+Foundry chat functions (`azure-chat`, `enrich-vocabulary`) prompt for JSON and parse defensively (strip ```json fences); they avoid `response_format: json_object`, which triggers a "Failed to reconstruct non-streaming response" 500 on the Grok deployment.
 
 ## Data & state
 
 - `data/local_articles.dart` — hardcoded B1 German articles; `articleForTopics()` picks by topic. No DB-backed content yet.
-- Supabase: Auth + a `profiles` table (`id`, `name`, `learning_reason`, `favorite_topics`). No other queries/storage. Credentials hardcoded in `main.dart` and duplicated in the Azure service.
+- Supabase: Auth + `profiles` and `saved_vocabulary` tables (the latter is the only DB-backed feature content, with RLS; schema in `supabase/migrations/`). Credentials hardcoded in `main.dart` and duplicated in the Azure service.
 - No state management — raw `StatefulWidget` with direct `Supabase.instance.client` calls in widgets; no repository layer or caching.
 
 ## Design tokens
