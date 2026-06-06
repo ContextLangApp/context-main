@@ -1,6 +1,7 @@
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../models/saved_word.dart';
+import 'azure_ai_service.dart';
 
 /// Outcome of attempting to save a word to the dictionary.
 enum SaveStatus { saved, alreadySaved, error }
@@ -24,6 +25,8 @@ class SaveResult {
 /// Word enrichment is delegated to the `enrich-vocabulary` edge function so
 /// the Azure keys stay server-side.
 class VocabularyService {
+  final AzureAiService _ai = AzureAiService();
+
   SupabaseClient get _client => Supabase.instance.client;
 
   /// Lowercase, punctuation-stripped form used for duplicate detection and the
@@ -60,7 +63,10 @@ class VocabularyService {
         return SaveResult.alreadySaved();
       }
 
-      final enriched = await _enrich(word.trim(), sourceContext);
+      final enriched = await _ai.enrichVocabulary(
+        word: word.trim(),
+        sourceContext: sourceContext,
+      );
 
       await _client.from('saved_vocabulary').insert({
         'user_id': userId,
@@ -87,25 +93,6 @@ class VocabularyService {
     } catch (_) {
       return SaveResult.error("Couldn't save the word. Please try again.");
     }
-  }
-
-  Future<Map<String, dynamic>> _enrich(
-    String word,
-    String sourceContext,
-  ) async {
-    final response = await _client.functions.invoke(
-      'enrich-vocabulary',
-      body: {'word': word, 'sourceContext': sourceContext},
-    );
-
-    final data = response.data;
-    if (data is! Map<String, dynamic>) {
-      throw Exception('Unexpected enrichment response');
-    }
-    if (data['error'] != null) {
-      throw Exception(data['error'].toString());
-    }
-    return data;
   }
 
   Future<List<SavedWord>> fetchSavedVocabulary() async {

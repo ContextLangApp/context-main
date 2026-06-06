@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../data/local_articles.dart';
 import '../../models/article.dart';
+import '../../services/profile_service.dart';
 import '../../widgets/vocabulary_selectable_text.dart';
 
 class ArticleReaderPage extends StatefulWidget {
@@ -22,20 +22,12 @@ class _ArticleReaderPageState extends State<ArticleReaderPage> {
     _loadArticle();
   }
 
+  final ProfileService _profileService = ProfileService();
+
   Future<void> _loadArticle() async {
     List<String> topics = [];
     try {
-      final userId = Supabase.instance.client.auth.currentUser?.id;
-      if (userId != null) {
-        final profile = await Supabase.instance.client
-            .from('profiles')
-            .select('favorite_topics')
-            .eq('id', userId)
-            .maybeSingle();
-        if (profile != null && profile['favorite_topics'] != null) {
-          topics = List<String>.from(profile['favorite_topics'] as List);
-        }
-      }
+      topics = await _profileService.favoriteTopics();
     } catch (_) {}
 
     if (mounted) {

@@ -56,9 +56,10 @@ Cross-cutting feature for capturing words from any learning content into a per-u
 
 **AI policy: all cloud AI goes through Supabase Edge Functions backed by Azure — no AI-provider keys in the client.** Two Azure services sit behind the functions: Azure **Speech** (`AZURE_SPEECH_*`) for STT/TTS, and Azure **AI Foundry** (OpenAI-compatible, currently Grok, `AZURE_OPENAI_*`) for the LLM. On-device `speech_to_text` is allowed for live transcription (no cloud key).
 
-- `services/azure_ai_service.dart` (`AzureAiService`) — the single AI gateway. Methods: `transcribeAudio`, `chat`, `synthesizeSpeech`, `getSpeakingFeedback`. Calls the edge functions over HTTP with the signed-in JWT (anon-key fallback).
+- `services/azure_ai_service.dart` (`AzureAiService`) — the single AI gateway. Methods: `transcribeAudio`, `chat`, `synthesizeSpeech`, `getSpeakingFeedback`, `enrichVocabulary`. Calls the edge functions over HTTP with the signed-in JWT (anon-key fallback).
 - `services/tts_playback_service.dart` — wraps `AzureAiService.synthesizeSpeech` + `audioplayers` playback; shared by scenario and the Dictionary speaker.
-- `services/vocabulary_service.dart` — calls `enrich-vocabulary` via `Supabase.functions.invoke`.
+- `services/vocabulary_service.dart` — dictionary CRUD; enrichment delegated to `AzureAiService.enrichVocabulary`.
+- `services/profile_service.dart` — reads the `profiles` row (`profileExists`, `favoriteTopics`); used by `main.dart` and `article_reader`.
 - Edge functions: `azure-stt`, `azure-tts` (Azure Speech); `azure-chat`, `enrich-vocabulary`, `speaking-feedback` (Foundry). New AI capabilities should follow this pattern, not call a provider from the client.
 
 Foundry functions prompt for JSON and parse defensively (strip ```json fences); they avoid `response_format: json_object`, which triggers a "Failed to reconstruct non-streaming response" 500 on the Grok deployment.
@@ -66,8 +67,8 @@ Foundry functions prompt for JSON and parse defensively (strip ```json fences); 
 ## Data & state
 
 - `data/local_articles.dart` — hardcoded B1 German articles; `articleForTopics()` picks by topic. No DB-backed content yet.
-- Supabase: Auth + `profiles` and `saved_vocabulary` tables (the latter is the only DB-backed feature content, with RLS; schema in `supabase/migrations/`). Credentials hardcoded in `main.dart` and duplicated in the Azure service.
-- No state management — raw `StatefulWidget` with direct `Supabase.instance.client` calls in widgets; no repository layer or caching.
+- Supabase: Auth + `profiles` and `saved_vocabulary` tables (the latter is the only DB-backed feature content, with RLS; schema in `supabase/migrations/`). Credentials live in `config/app_config.dart` (`AppConfig`).
+- No state management library — raw `StatefulWidget`s. DB access is moving into thin services (`profile_service`, `vocabulary_service`) rather than inline `Supabase.instance.client` calls in widgets; no caching yet.
 
 ## Design tokens
 

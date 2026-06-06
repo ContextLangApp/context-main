@@ -4,14 +4,13 @@ import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:supabase_flutter/supabase_flutter.dart';
 
-const _supabaseUrl = 'https://gfdsibvelqceexcgerah.supabase.co';
-const _supabaseAnonKey = 'sb_publishable_vFZdq8NT56-4deP4eH3xOQ_SQQ4GBW2';
+import '../config/app_config.dart';
 
 /// Single gateway for the app's cloud AI, all proxied through Supabase Edge
 /// Functions backed by Azure (Azure Speech for STT/TTS, Azure AI Foundry for
 /// the LLM). No AI-provider keys live in the client.
 class AzureAiService {
-  static const _functionsBase = '$_supabaseUrl/functions/v1';
+  static const _functionsBase = '${AppConfig.supabaseUrl}/functions/v1';
 
   void _log(String message) {
     debugPrint('[AzureAiService] $message');
@@ -37,7 +36,7 @@ class AzureAiService {
 
   String get _authHeader {
     final session = Supabase.instance.client.auth.currentSession;
-    final token = session?.accessToken ?? _supabaseAnonKey;
+    final token = session?.accessToken ?? AppConfig.supabaseAnonKey;
     return 'Bearer $token';
   }
 
@@ -169,5 +168,38 @@ class AzureAiService {
     final feedback = (json['feedback'] as String?) ?? '';
     _log('Feedback success: feedbackLength=${feedback.length}');
     return feedback;
+  }
+
+  Future<Map<String, dynamic>> enrichVocabulary({
+    required String word,
+    required String sourceContext,
+  }) async {
+    _log(
+      'Enrich start: wordLength=${word.length}, contextLength=${sourceContext.length}, auth=$_authMode',
+    );
+    final response = await http.post(
+      Uri.parse('$_functionsBase/enrich-vocabulary'),
+      headers: {
+        'Authorization': _authHeader,
+        'Content-Type': 'application/json',
+      },
+      body: jsonEncode({'word': word, 'sourceContext': sourceContext}),
+    );
+    _log(
+      'Enrich response: status=${response.statusCode}, bodyBytes=${response.bodyBytes.length}',
+    );
+
+    if (response.statusCode != 200) {
+      _log('Enrich failure body: ${_bodyPreview(response.body)}');
+      throw Exception('Enrich failed (${response.statusCode}): ${response.body}');
+    }
+
+    final json = jsonDecode(response.body) as Map<String, dynamic>;
+    if (json.containsKey('error')) {
+      _log('Enrich JSON error: ${json['error']}');
+      throw Exception('Enrich error: ${json['error']}');
+    }
+    _log('Enrich success');
+    return json;
   }
 }

@@ -197,7 +197,7 @@ class _ScenarioConversationPageState extends State<ScenarioConversationPage> {
       _log('submit audio error: $e');
       if (!mounted) return;
       setState(() {
-        _errorText = 'Error: $e';
+        _errorText = 'Something went wrong. Please try again.';
         _loadingResponse = false;
       });
     }
@@ -222,7 +222,7 @@ class _ScenarioConversationPageState extends State<ScenarioConversationPage> {
     } catch (e) {
       _log('repeat waiter error: $e');
       if (!mounted) return;
-      setState(() => _errorText = 'Could not play audio: $e');
+      setState(() => _errorText = "Couldn't play the audio. Please try again.");
     }
   }
 
@@ -236,7 +236,7 @@ class _ScenarioConversationPageState extends State<ScenarioConversationPage> {
     } catch (e) {
       _log('initial TTS error: $e');
       if (!mounted) return;
-      setState(() => _errorText = 'Initial waiter audio failed: $e');
+      setState(() => _errorText = "Couldn't load the audio. Please try again.");
     }
   }
 
