@@ -3,6 +3,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../data/local_articles.dart';
 import '../../models/article.dart';
+import '../../widgets/vocabulary_selectable_text.dart';
 
 class ArticleReaderPage extends StatefulWidget {
   const ArticleReaderPage({super.key});
@@ -149,7 +150,7 @@ class _ArticleCard extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 16),
-          Text(
+          VocabularySelectableText(
             article.body,
             style: const TextStyle(
               fontSize: 16,

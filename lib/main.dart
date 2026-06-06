@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'features/home/home_page.dart';
 import 'features/onboarding/onboarding_flow.dart';
+import 'features/practice/practice_page.dart';
 import 'features/welcome/welcome_page.dart';
 
 void main() async {
@@ -127,7 +128,7 @@ class _MainShellState extends State<MainShell> {
 
   final List<Widget> _pages = const [
     HomePage(),
-    Placeholder(),
+    PracticePage(),
     Placeholder(),
     Placeholder(),
   ];

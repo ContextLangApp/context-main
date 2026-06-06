@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:speech_to_text/speech_to_text.dart';
 
 import '../../services/gemini_service.dart';
+import '../../widgets/vocabulary_selectable_text.dart';
 
 class SpeakPracticePage extends StatefulWidget {
   const SpeakPracticePage({super.key});
@@ -227,7 +228,7 @@ class _RecognizedTextBox extends StatelessWidget {
                 fontStyle: FontStyle.italic,
               ),
             )
-          : Text(
+          : VocabularySelectableText(
               text,
               style: const TextStyle(
                 fontSize: 16,

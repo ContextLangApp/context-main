@@ -5,22 +5,23 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 }
 
-interface HistoryMessage {
-  role: 'waiter' | 'user'
-  text: string
-}
-
 interface RequestBody {
-  conversationHistory: HistoryMessage[]
-  latestUserMessage: string
+  word: string
+  sourceContext?: string
 }
 
-const SYSTEM_PROMPT = `You are a friendly German restaurant waiter helping a language learner practice German conversation.
-Respond naturally in German as a waiter would. Keep your response concise (1-3 sentences).
-Also provide a brief learning tip in English about a German phrase, grammar point, or vocabulary word from the conversation.
+const SYSTEM_PROMPT = `You are a German tutor enriching a single German word for a language learner's personal dictionary.
+You are given the word and the sentence it appeared in (its context). Use the context to pick the correct meaning when the word is ambiguous.
 
 You MUST respond with valid JSON in exactly this format, with no additional text:
-{"waiterResponse": "your German response here", "tip": "English learning tip here"}
+{
+  "word": "the German word, with correct capitalization and article if it is a noun (e.g. 'der Tisch')",
+  "normalizedWord": "the lowercase base form of the word, no punctuation",
+  "meaning": "a short, simple English meaning",
+  "pronunciation": "an easy-to-read pronunciation hint (not strict IPA), e.g. 'der TISH'",
+  "exampleSentence": "a short, natural German example sentence using the word",
+  "realLifeUsage": "one brief English sentence on where or when this word is commonly used"
+}
 
 Return ONLY the raw JSON object. Do not wrap it in markdown code fences and do not add any other text.`
 
@@ -59,22 +60,18 @@ serve(async (req) => {
   }
 
   const requestId = crypto.randomUUID()
-  console.log(`[azure-chat][${requestId}] start method=${req.method} contentType=${req.headers.get('content-type')} contentLength=${req.headers.get('content-length')}`)
+  console.log(`[enrich-vocabulary][${requestId}] start method=${req.method} contentType=${req.headers.get('content-type')} contentLength=${req.headers.get('content-length')}`)
 
   try {
-    // AZURE_OPENAI_ENDPOINT can be either:
-    // - https://your-resource.services.ai.azure.com/openai/v1
-    // - https://your-resource.services.ai.azure.com/openai/v1/chat/completions
-    // - https://your-resource.openai.azure.com/openai/v1
     const projectEndpoint = Deno.env.get('AZURE_OPENAI_ENDPOINT')
     const apiKey = Deno.env.get('AZURE_OPENAI_KEY')
     const deployment = Deno.env.get('AZURE_OPENAI_DEPLOYMENT')
     console.log(
-      `[azure-chat][${requestId}] env endpointPresent=${Boolean(projectEndpoint)} keyPresent=${Boolean(apiKey)} deployment=${deployment ?? 'missing'}`,
+      `[enrich-vocabulary][${requestId}] env endpointPresent=${Boolean(projectEndpoint)} keyPresent=${Boolean(apiKey)} deployment=${deployment ?? 'missing'}`,
     )
 
     if (!projectEndpoint || !apiKey || !deployment) {
-      console.error(`[azure-chat][${requestId}] missing AI Foundry credentials`)
+      console.error(`[enrich-vocabulary][${requestId}] missing AI Foundry credentials`)
       return new Response(
         JSON.stringify({ error: 'Azure AI Foundry credentials not configured' }),
         { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
@@ -82,27 +79,31 @@ serve(async (req) => {
     }
 
     const body: RequestBody = await req.json()
-    const { conversationHistory, latestUserMessage } = body
+    const word = typeof body.word === 'string' ? body.word.trim() : ''
+    const sourceContext = typeof body.sourceContext === 'string' ? body.sourceContext.trim() : ''
     console.log(
-      `[azure-chat][${requestId}] parsed body historyCount=${conversationHistory?.length ?? 0} latestLength=${latestUserMessage?.length ?? 0}`,
+      `[enrich-vocabulary][${requestId}] parsed body wordLength=${word.length} contextLength=${sourceContext.length}`,
     )
 
-    const messages: { role: string; content: string }[] = [
-      { role: 'system', content: SYSTEM_PROMPT },
-    ]
-
-    for (const msg of conversationHistory) {
-      messages.push({
-        role: msg.role === 'waiter' ? 'assistant' : 'user',
-        content: msg.text,
-      })
+    if (word.length === 0) {
+      console.error(`[enrich-vocabulary][${requestId}] missing word field`)
+      return new Response(
+        JSON.stringify({ error: 'word field is required' }),
+        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
+      )
     }
 
-    messages.push({ role: 'user', content: latestUserMessage })
+    const userContent = sourceContext.length > 0
+      ? `Word: "${word}"\nContext: "${sourceContext}"`
+      : `Word: "${word}"\nContext: (none provided)`
 
-    // Grok deployments in Azure AI Foundry use the v1 OpenAI-compatible route.
+    const messages = [
+      { role: 'system', content: SYSTEM_PROMPT },
+      { role: 'user', content: userContent },
+    ]
+
     const url = buildChatCompletionsUrl(projectEndpoint)
-    console.log(`[azure-chat][${requestId}] outbound url=${url} messageCount=${messages.length}`)
+    console.log(`[enrich-vocabulary][${requestId}] outbound url=${url}`)
 
     const response = await fetch(url, {
       method: 'POST',
@@ -113,15 +114,15 @@ serve(async (req) => {
       body: JSON.stringify({
         model: deployment,
         messages,
-        max_tokens: 800,
-        temperature: 0.7,
+        max_tokens: 1000,
+        temperature: 0.5,
       }),
     })
-    console.log(`[azure-chat][${requestId}] foundry response status=${response.status} contentType=${response.headers.get('content-type')}`)
+    console.log(`[enrich-vocabulary][${requestId}] foundry response status=${response.status} contentType=${response.headers.get('content-type')}`)
 
     if (!response.ok) {
       const errorBody = await response.text()
-      console.error(`[azure-chat][${requestId}] foundry error status=${response.status} body=${errorBody.slice(0, 1500)}`)
+      console.error(`[enrich-vocabulary][${requestId}] foundry error status=${response.status} body=${errorBody.slice(0, 1500)}`)
       return new Response(
         JSON.stringify({ error: `AI Foundry error ${response.status}: ${errorBody}` }),
         { status: 502, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
@@ -130,17 +131,17 @@ serve(async (req) => {
 
     const result = await response.json()
     const content: string = result.choices[0].message.content
-    console.log(`[azure-chat][${requestId}] foundry success contentLength=${content?.length ?? 0}`)
+    console.log(`[enrich-vocabulary][${requestId}] foundry success contentLength=${content?.length ?? 0}`)
     const parsed = JSON.parse(stripJsonCodeFence(content))
     console.log(
-      `[azure-chat][${requestId}] parsed JSON waiterLength=${parsed.waiterResponse?.length ?? 0} tipLength=${parsed.tip?.length ?? 0}`,
+      `[enrich-vocabulary][${requestId}] parsed JSON normalizedWord=${parsed.normalizedWord ?? 'missing'} meaningLength=${parsed.meaning?.length ?? 0}`,
     )
 
     return new Response(JSON.stringify(parsed), {
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     })
   } catch (err) {
-    console.error(`[azure-chat][${requestId}] unhandled error ${String(err)}`)
+    console.error(`[enrich-vocabulary][${requestId}] unhandled error ${String(err)}`)
     return new Response(JSON.stringify({ error: String(err) }), {
       status: 500,
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
