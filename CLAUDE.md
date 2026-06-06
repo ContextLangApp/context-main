@@ -1,59 +1,69 @@
 # CLAUDE.md
 
-**Context** — an AI-integrated German learning app focused on contextual reading and real-life scenario conversations. Built with Flutter + Supabase. Early-stage — most features are stubs.
+**Context** — an AI-integrated German learning app focused on contextual reading and real-life scenario conversations. Flutter + Supabase, with Supabase Edge Functions proxying Azure AI services. Early-stage.
 
 ## Commands
 
 ```bash
-flutter run -d <device-id>       # run on device
-flutter devices                  # list devices
-flutter build apk                # Android build
-flutter build ios                # iOS build
-flutter test                     # all tests
-flutter test test/widget_test.dart  # single file
-flutter analyze                  # lint
+flutter run -d <device-id>                       # run on device
+flutter run --dart-define=GEMINI_API_KEY=<key>   # speak-practice needs this
+flutter devices                                  # list devices
+flutter build apk / flutter build ios
+flutter test                                     # all tests (currently an empty stub)
+flutter analyze                                  # lint
 ```
 
-## Architecture
+## App shell & navigation
 
-### App shell & navigation
+`main.dart` initializes Supabase, then `_RootPage` listens to `auth.onAuthStateChange`:
+- No session → `WelcomePage`
+- Session but no `profiles` row → `OnboardingFlow`
+- Session + profile → `MainShell`
 
-`main.dart` initializes Supabase, then `_RootPage` listens to `supabase.auth.onAuthStateChange`. Authenticated → `MainShell`; unauthenticated → `WelcomePage`.
+The profile check runs on both `signedIn` and `initialSession`, so interrupted onboarding resumes on restart.
 
-`MainShell` is a bottom-nav shell with 4 tabs: **Home** (implemented), **Practice**, **Leagues**, **Profile** (all `Placeholder()`).
+`MainShell` is a 4-tab bottom nav: **Home** (implemented), **Practice**, **Leagues**, **Profile** (all `Placeholder()`). Feature entry points currently live as cards on Home, not under the Practice tab.
 
-### Auth flow
+## Auth
 
-Auth pages (`SignUpPage`, `LogInPage`) are pushed on top of `WelcomePage` via `Navigator.push`. They are **not** replaced by `_RootPage` automatically — each page is responsible for popping itself after auth succeeds. For Google OAuth, this means subscribing to `onAuthStateChange` and popping on `signedIn`, since `signInWithOAuth` returns before the deep link callback fires.
+Email/password + Google OAuth via Supabase. Auth pages (`SignUpPage`, `LogInPage`) are pushed over `WelcomePage` and pop themselves after auth — `_RootPage` does not replace them. Google OAuth subscribes to `onAuthStateChange` and pops on `signedIn`, since `signInWithOAuth` returns before the deep-link callback.
 
-Deep links use the `io.supabase.context://login-callback/` scheme (configured in `AndroidManifest.xml` and `Info.plist`). This URL must also be in Supabase Dashboard → Authentication → URL Configuration → Redirect URLs.
+Deep link scheme `io.supabase.context://login-callback/` (in `AndroidManifest.xml`, `Info.plist`, and Supabase Dashboard → Auth → Redirect URLs).
 
-### Feature structure
+## Features
 
 ```
 lib/features/
-  welcome/welcome_page.dart   — video background, feature carousel, CTA buttons, Google OAuth
-  auth/log_in_page.dart        — email/password login + Google OAuth
-  auth/sign_up_page.dart       — email/password sign-up
-  home/home_page.dart          — top bar (stats + sign-out), one active lesson card, locked placeholders
+  welcome/                 — video background, feature carousel, CTA, Google OAuth
+  auth/                    — log_in_page, sign_up_page (auth_page.dart is a dead stub)
+  onboarding/              — 3-step flow (name, reason, topics); upserts to `profiles`
+  home/                    — top bar (stats + sign-out), feature cards, locked placeholders
+  article_reader/          — shows a local article matched to the user's favorite_topics
+  speak_practice/          — on-device speech_to_text → Gemini feedback
+  scenario_conversation/   — record audio → Azure STT → chat → TTS playback
 ```
 
-### State management
+## Services & AI backends
 
-None — raw `StatefulWidget` throughout. Direct `Supabase.instance.client` calls inside widgets with no service/repository layer.
+Two parallel stacks (a known inconsistency worth consolidating):
+- `services/gemini_service.dart` — **direct client call** to Gemini for speak-practice feedback. Key via `--dart-define=GEMINI_API_KEY` (compiled into the build).
+- `services/azure_conversation_service.dart` — calls Supabase Edge Functions (`supabase/functions/azure-{stt,chat,tts}`) that hold the Azure keys server-side. Chat is Grok via Azure AI Foundry. Auth header uses the signed-in JWT, falling back to the anon key.
 
-### Supabase
+## Data & state
 
-Credentials are hardcoded in `main.dart`. Uses `supabase_flutter ^2.5.0`. Only Auth is wired up — no database queries or storage calls yet.
+- `data/local_articles.dart` — hardcoded B1 German articles; `articleForTopics()` picks by topic. No DB-backed content yet.
+- Supabase: Auth + a `profiles` table (`id`, `name`, `learning_reason`, `favorite_topics`). No other queries/storage. Credentials hardcoded in `main.dart` and duplicated in the Azure service.
+- No state management — raw `StatefulWidget` with direct `Supabase.instance.client` calls in widgets; no repository layer or caching.
 
-### Design tokens
+## Design tokens
 
 - Purple `0xFF8B5CF6` — primary buttons, gradients
 - Pink `0xFFEC4899` — accents, gradients
-- Light gray `0xFFEFF3F7` — scaffold background (auth pages)
-- Disabled button blue-gray `0xFFB8C4E0`
+- Light gray `0xFFEFF3F7` — scaffold background
+- Disabled blue-gray `0xFFB8C4E0`
 
-### Placeholder assets
+## Placeholder assets
 
-- **Welcome video:** `assets/videos/welcome_bg.mp4` is a placeholder — a gradient fallback shows while loading or if missing.
-- **Google logo:** `_GooglePlaceholder` widget (grey circle) is used in `welcome_page.dart` and `log_in_page.dart`. Replace with `Image.asset(...)` when the real asset is ready.
+- `assets/videos/welcome_bg.mp4` — placeholder; gradient fallback shows if missing.
+- `_GooglePlaceholder` (grey circle) stands in for the Google logo in `welcome_page.dart` and `log_in_page.dart`.
+- Welcome carousel copy and Home stats (streak/diamonds/stars, hardcoded `0`) are placeholders.

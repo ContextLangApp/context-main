@@ -94,7 +94,10 @@ class _OnboardingFlowState extends State<OnboardingFlow> {
   Future<void> _saveAndFinish() async {
     setState(() => _isLoading = true);
     try {
-      await Supabase.instance.client.from('profiles').insert({
+      // Upsert (not insert) so a pre-existing or partial profile row — e.g.
+      // from an interrupted run or a signup trigger — doesn't dead-end
+      // onboarding with a duplicate-key error.
+      await Supabase.instance.client.from('profiles').upsert({
         'id': Supabase.instance.client.auth.currentUser!.id,
         'name': _nameController.text.trim(),
         'learning_reason': _learningReason,

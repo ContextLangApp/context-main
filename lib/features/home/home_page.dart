@@ -40,6 +40,33 @@ class HomePage extends StatelessWidget {
 }
 
 class _TopBar extends StatelessWidget {
+  Future<void> _confirmSignOut(BuildContext context) async {
+    final shouldSignOut = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Sign out?'),
+        content: const Text('You can sign back in anytime.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: const Text(
+              'Sign out',
+              style: TextStyle(color: Color(0xFFFF2D55)),
+            ),
+          ),
+        ],
+      ),
+    );
+
+    if (shouldSignOut == true) {
+      await Supabase.instance.client.auth.signOut();
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Padding(
@@ -52,20 +79,25 @@ class _TopBar extends StatelessWidget {
           const SizedBox(width: 8),
           _StatChip(emoji: '⭐', value: 0, color: const Color(0xFFFFCC00)),
           const Spacer(),
-          GestureDetector(
-            onTap: () async {
-              await Supabase.instance.client.auth.signOut();
-            },
-            child: const Icon(
-              Icons.emoji_events_outlined,
-              color: Color(0xFFFF2D55),
-              size: 28,
-            ),
+          const Icon(
+            Icons.emoji_events_outlined,
+            color: Color(0xFFFF2D55),
+            size: 28,
           ),
+          const SizedBox(width: 8),
           const Icon(
             Icons.notifications_outlined,
             color: Color(0xFFFF2D55),
             size: 28,
+          ),
+          const SizedBox(width: 8),
+          GestureDetector(
+            onTap: () => _confirmSignOut(context),
+            child: const Icon(
+              Icons.logout,
+              color: Color(0xFFFF2D55),
+              size: 28,
+            ),
           ),
         ],
       ),

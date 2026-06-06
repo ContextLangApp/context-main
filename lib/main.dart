@@ -58,8 +58,11 @@ class _RootPageState extends State<_RootPage> {
         }
       });
 
-      // Only check profile on a fresh sign-in, not on app restart (initialSession).
-      if (newSession != null && event == AuthChangeEvent.signedIn) {
+      // Check the profile both on a fresh sign-in and on app restart
+      // (initialSession), so onboarding can resume if it was interrupted.
+      if (newSession != null &&
+          (event == AuthChangeEvent.signedIn ||
+              event == AuthChangeEvent.initialSession)) {
         _checkProfile();
       }
     });
