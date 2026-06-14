@@ -37,7 +37,6 @@ dependencies:
   supabase_flutter: ^2.5.0
   video_player: ^2.9.2
   speech_to_text: ^7.0.0
-  flutter_tts: ^4.2.5
   http: ^1.6.0
   record: ^6.0.0
   audioplayers: ^6.1.0

@@ -1,16 +1,19 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'config/app_config.dart';
 import 'features/home/home_page.dart';
 import 'features/onboarding/onboarding_flow.dart';
+import 'features/practice/practice_page.dart';
 import 'features/welcome/welcome_page.dart';
+import 'services/profile_service.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
   await Supabase.initialize(
-    url: 'https://gfdsibvelqceexcgerah.supabase.co',
-    anonKey: 'sb_publishable_vFZdq8NT56-4deP4eH3xOQ_SQQ4GBW2',
+    url: AppConfig.supabaseUrl,
+    anonKey: AppConfig.supabaseAnonKey,
   );
 
   runApp(const ContextApp());
@@ -39,6 +42,7 @@ class _RootPage extends StatefulWidget {
 
 class _RootPageState extends State<_RootPage> {
   late final StreamSubscription<AuthState> _authSub;
+  final ProfileService _profileService = ProfileService();
   Session? _session;
   bool _checkingProfile = false;
   bool _showOnboarding = false;
@@ -71,14 +75,8 @@ class _RootPageState extends State<_RootPage> {
   Future<void> _checkProfile() async {
     setState(() => _checkingProfile = true);
     try {
-      final userId = Supabase.instance.client.auth.currentUser?.id;
-      if (userId == null) return;
-      final result = await Supabase.instance.client
-          .from('profiles')
-          .select('id')
-          .eq('id', userId)
-          .maybeSingle();
-      if (mounted) setState(() => _showOnboarding = result == null);
+      final exists = await _profileService.profileExists();
+      if (mounted) setState(() => _showOnboarding = !exists);
     } catch (_) {
       if (mounted) setState(() => _showOnboarding = false);
     } finally {
@@ -127,7 +125,7 @@ class _MainShellState extends State<MainShell> {
 
   final List<Widget> _pages = const [
     HomePage(),
-    Placeholder(),
+    PracticePage(),
     Placeholder(),
     Placeholder(),
   ];

@@ -4,7 +4,7 @@
         {
             "label": "Run Flutter Emulator",
             "type": "shell",
-            "command": "flutter run -d emulator-5554 --dart-define=GEMINI_API_KEY=AIzaSyAR3_oM2L5DcEAQF_8ktReZlWRyl8kVKOo",
+            "command": "flutter run -d emulator-5554",
             "problemMatcher": [],
             "presentation": {
                 "reveal": "always",

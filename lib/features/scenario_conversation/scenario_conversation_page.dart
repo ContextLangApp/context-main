@@ -1,11 +1,12 @@
 import 'dart:io';
 import 'dart:typed_data';
 
-import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter/material.dart';
 import 'package:record/record.dart';
 
-import '../../services/azure_conversation_service.dart';
+import '../../services/azure_ai_service.dart';
+import '../../services/tts_playback_service.dart';
+import '../../widgets/vocabulary_selectable_text.dart';
 
 const String _initialWaiterMessage =
     'Guten Tag! Willkommen in unserem Restaurant. Möchten Sie schon etwas bestellen?';
@@ -29,8 +30,8 @@ class ScenarioConversationPage extends StatefulWidget {
 
 class _ScenarioConversationPageState extends State<ScenarioConversationPage> {
   final AudioRecorder _recorder = AudioRecorder();
-  final AudioPlayer _player = AudioPlayer();
-  final AzureConversationService _azure = AzureConversationService();
+  final AzureAiService _azure = AzureAiService();
+  late final TtsPlaybackService _tts = TtsPlaybackService(azure: _azure);
   final ScrollController _scrollController = ScrollController();
 
   final List<_ScenarioMessage> _messages = [];
@@ -190,32 +191,22 @@ class _ScenarioConversationPageState extends State<ScenarioConversationPage> {
       _lastTtsBytes = audioBytes;
       setState(() => _loadingResponse = false);
       _log('stage playback start');
-      await _playAudioBytes(audioBytes);
+      await _tts.playBytes(audioBytes);
       _log('stage playback requested');
     } catch (e) {
       _log('submit audio error: $e');
       if (!mounted) return;
       setState(() {
-        _errorText = 'Error: $e';
+        _errorText = 'Something went wrong. Please try again.';
         _loadingResponse = false;
       });
     }
   }
 
-  Future<void> _playAudioBytes(Uint8List bytes) async {
-    final tempFile = File('${Directory.systemTemp.path}/tts_output.mp3');
-    _log(
-      'play audio: writing temp file=${tempFile.path}, bytes=${bytes.length}, prefix=${_bytesPreview(bytes)}',
-    );
-    await tempFile.writeAsBytes(bytes);
-    await _player.stop();
-    await _player.play(DeviceFileSource(tempFile.path));
-  }
-
   Future<void> _speakLatestWaiterMessage() async {
     if (_lastTtsBytes != null) {
       _log('repeat waiter: using cached audio bytes=${_lastTtsBytes!.length}');
-      await _playAudioBytes(_lastTtsBytes!);
+      await _tts.playBytes(_lastTtsBytes!);
       return;
     }
     final text = _latestWaiterMessage;
@@ -225,29 +216,27 @@ class _ScenarioConversationPageState extends State<ScenarioConversationPage> {
     }
     try {
       _log('repeat waiter: fetching TTS for latest waiter message');
-      final bytes = await _azure.synthesizeSpeech(text);
+      final bytes = await _tts.speak(text);
       if (!mounted) return;
       _lastTtsBytes = bytes;
-      await _playAudioBytes(bytes);
     } catch (e) {
       _log('repeat waiter error: $e');
       if (!mounted) return;
-      setState(() => _errorText = 'Could not play audio: $e');
+      setState(() => _errorText = "Couldn't play the audio. Please try again.");
     }
   }
 
   Future<void> _speakInitialMessage() async {
     try {
       _log('initial TTS start');
-      final bytes = await _azure.synthesizeSpeech(_initialWaiterMessage);
+      final bytes = await _tts.speak(_initialWaiterMessage);
       _log('initial TTS done: bytes=${bytes.length}');
       if (!mounted) return;
       _lastTtsBytes = bytes;
-      await _playAudioBytes(bytes);
     } catch (e) {
       _log('initial TTS error: $e');
       if (!mounted) return;
-      setState(() => _errorText = 'Initial waiter audio failed: $e');
+      setState(() => _errorText = "Couldn't load the audio. Please try again.");
     }
   }
 
@@ -261,7 +250,7 @@ class _ScenarioConversationPageState extends State<ScenarioConversationPage> {
   Future<void> _resetScenario({bool speak = false}) async {
     _log('reset scenario: speak=$speak, wasRecording=$_isRecording');
     if (_isRecording) await _recorder.stop();
-    await _player.stop();
+    await _tts.stop();
 
     setState(() {
       _messages
@@ -297,7 +286,7 @@ class _ScenarioConversationPageState extends State<ScenarioConversationPage> {
   @override
   void dispose() {
     _recorder.dispose();
-    _player.dispose();
+    _tts.dispose();
     _scrollController.dispose();
     super.dispose();
   }
@@ -517,7 +506,7 @@ class _MessageBubble extends StatelessWidget {
           color: isUser ? const Color(0xFF8B5CF6) : const Color(0xFFEFF3F7),
           borderRadius: BorderRadius.circular(18),
         ),
-        child: Text(
+        child: VocabularySelectableText(
           message.text,
           style: TextStyle(
             color: isUser ? Colors.white : Colors.black87,

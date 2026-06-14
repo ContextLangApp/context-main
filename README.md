@@ -1,11 +1,12 @@
 # context-repo
 
-## Running with Gemini
+A Flutter + Supabase German learning app. All cloud AI (LLM, STT, TTS) runs
+through Supabase Edge Functions backed by Azure — no AI keys ship in the client.
 
-Gemini requests require a local API key at launch time:
+## Running
 
 ```bash
-flutter run -d <device-id> --dart-define=GEMINI_API_KEY=your_key
+flutter run -d <device-id>
 ```
 
-Do not commit Gemini API keys to source control.
+No `--dart-define` keys are required to run the app.

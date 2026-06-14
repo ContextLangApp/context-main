@@ -1,7 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:speech_to_text/speech_to_text.dart';
 
-import '../../services/gemini_service.dart';
+import '../../services/azure_ai_service.dart';
+import '../../widgets/vocabulary_selectable_text.dart';
 
 class SpeakPracticePage extends StatefulWidget {
   const SpeakPracticePage({super.key});
@@ -12,7 +13,7 @@ class SpeakPracticePage extends StatefulWidget {
 
 class _SpeakPracticePageState extends State<SpeakPracticePage> {
   final SpeechToText _speech = SpeechToText();
-  final GeminiService _geminiService = GeminiService();
+  final AzureAiService _ai = AzureAiService();
 
   bool _speechAvailable = false;
   bool _isListening = false;
@@ -82,18 +83,18 @@ class _SpeakPracticePageState extends State<SpeakPracticePage> {
       _feedbackError = null;
     });
     try {
-      final feedback =
-          await _geminiService.getGermanSpeakingFeedback(_recognizedText);
+      final feedback = await _ai.getSpeakingFeedback(_recognizedText);
       if (mounted) {
         setState(() {
           _feedbackText = feedback;
           _loadingFeedback = false;
         });
       }
-    } catch (e) {
+    } catch (_) {
       if (mounted) {
         setState(() {
-          _feedbackError = 'Error: $e';
+          _feedbackError =
+              "Couldn't get feedback right now. Please try again.";
           _loadingFeedback = false;
         });
       }
@@ -227,7 +228,7 @@ class _RecognizedTextBox extends StatelessWidget {
                 fontStyle: FontStyle.italic,
               ),
             )
-          : Text(
+          : VocabularySelectableText(
               text,
               style: const TextStyle(
                 fontSize: 16,
