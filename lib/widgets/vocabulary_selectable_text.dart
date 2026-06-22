@@ -29,19 +29,33 @@ class _VocabularySelectableTextState extends State<VocabularySelectableText> {
   final VocabularyService _service = VocabularyService();
   bool _saving = false;
 
+  void _log(String message) {
+    debugPrint('[VocabularySelectableText] $message');
+  }
+
+  int _ms(Stopwatch stopwatch) => stopwatch.elapsedMilliseconds;
+
   Future<void> _save(String word) async {
-    if (_saving) return;
+    if (_saving) {
+      _log('save action ignored: already saving');
+      return;
+    }
+    final saveWatch = Stopwatch()..start();
+    _log(
+      'save action start: ts=${DateTime.now().toIso8601String()}, wordLength=${word.length}, contextLength=${(widget.sourceContext ?? widget.text).length}',
+    );
     setState(() => _saving = true);
 
     final messenger = ScaffoldMessenger.of(context);
     messenger.hideCurrentSnackBar();
-    messenger.showSnackBar(
-      SnackBar(content: Text('Saving "$word"…')),
-    );
+    messenger.showSnackBar(SnackBar(content: Text('Saving "$word"…')));
 
     final result = await _service.saveVocabulary(
       word,
       widget.sourceContext ?? widget.text,
+    );
+    _log(
+      'save action complete: totalMs=${_ms(saveWatch)}, status=${result.status.name}',
     );
 
     if (!mounted) return;

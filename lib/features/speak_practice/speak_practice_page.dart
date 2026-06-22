@@ -15,6 +15,9 @@ class _SpeakPracticePageState extends State<SpeakPracticePage> {
   final SpeechToText _speech = SpeechToText();
   final AzureAiService _ai = AzureAiService();
 
+  Stopwatch? _speechListenWatch;
+  int _speechResultCount = 0;
+
   bool _speechAvailable = false;
   bool _isListening = false;
   String _recognizedText = '';
@@ -30,28 +33,50 @@ class _SpeakPracticePageState extends State<SpeakPracticePage> {
     _initSpeech();
   }
 
+  void _log(String message) {
+    debugPrint('[SpeakPracticePage] $message');
+  }
+
+  int _ms(Stopwatch stopwatch) => stopwatch.elapsedMilliseconds;
+
   Future<void> _initSpeech() async {
+    final initWatch = Stopwatch()..start();
+    _log('STT init start: ts=${DateTime.now().toIso8601String()}');
     final available = await _speech.initialize(
       onStatus: _onStatus,
-      onError: (error) => setState(() => _isListening = false),
+      onError: (error) {
+        _log(
+          'STT error: elapsedMs=${_speechListenWatch?.elapsedMilliseconds}, error=$error',
+        );
+        if (mounted) setState(() => _isListening = false);
+      },
     );
     if (!mounted) return;
     if (available) {
+      final localesWatch = Stopwatch()..start();
       final locales = await _speech.locales();
+      localesWatch.stop();
       final german = locales.firstWhere(
         (l) => l.localeId.startsWith('de'),
         orElse: () => locales.first,
+      );
+      _log(
+        'STT init success: initMs=${_ms(initWatch)}, localesMs=${_ms(localesWatch)}, localeCount=${locales.length}, selectedLocale=${german.localeId}',
       );
       setState(() {
         _speechAvailable = true;
         _localeId = german.localeId;
       });
     } else {
+      _log('STT init unavailable: initMs=${_ms(initWatch)}');
       setState(() => _speechAvailable = false);
     }
   }
 
   void _onStatus(String status) {
+    _log(
+      'STT status: status=$status, listenElapsedMs=${_speechListenWatch?.elapsedMilliseconds}, resultEvents=$_speechResultCount, transcriptLength=${_recognizedText.length}',
+    );
     if (status == 'done' || status == 'notListening') {
       setState(() => _isListening = false);
     }
@@ -59,13 +84,28 @@ class _SpeakPracticePageState extends State<SpeakPracticePage> {
 
   Future<void> _toggleListening() async {
     if (_isListening) {
+      _log(
+        'STT stop requested: elapsedMs=${_speechListenWatch?.elapsedMilliseconds}',
+      );
+      final stopWatch = Stopwatch()..start();
       await _speech.stop();
+      stopWatch.stop();
+      _log('STT stop completed: stopMs=${_ms(stopWatch)}');
       setState(() => _isListening = false);
     } else {
+      _speechListenWatch = Stopwatch()..start();
+      _speechResultCount = 0;
+      _log(
+        'STT listen start: ts=${DateTime.now().toIso8601String()}, locale=$_localeId',
+      );
       setState(() => _isListening = true);
       await _speech.listen(
         onResult: (result) => setState(() {
+          _speechResultCount++;
           _recognizedText = result.recognizedWords;
+          _log(
+            'STT result: event=$_speechResultCount, elapsedMs=${_speechListenWatch?.elapsedMilliseconds}, final=${result.finalResult}, transcriptLength=${_recognizedText.length}',
+          );
         }),
         listenOptions: SpeechListenOptions(
           localeId: _localeId,
@@ -73,10 +113,17 @@ class _SpeakPracticePageState extends State<SpeakPracticePage> {
           pauseFor: const Duration(seconds: 3),
         ),
       );
+      _log(
+        'STT listen requested: setupMs=${_speechListenWatch?.elapsedMilliseconds}',
+      );
     }
   }
 
   Future<void> _getFeedback() async {
+    final feedbackWatch = Stopwatch()..start();
+    _log(
+      'Feedback pipeline start: ts=${DateTime.now().toIso8601String()}, transcriptLength=${_recognizedText.length}',
+    );
     setState(() {
       _loadingFeedback = true;
       _feedbackText = null;
@@ -94,10 +141,17 @@ class _SpeakPracticePageState extends State<SpeakPracticePage> {
             _loadingFeedback = false;
           });
         }
-      } catch (_) {
+        _log(
+          'Feedback pipeline success (streamed): totalMs=${_ms(feedbackWatch)}, feedbackLength=${buffer.length}',
+        );
+      } catch (streamErr) {
         // Streaming unsupported/failed — fall back to a single-shot reply.
+        _log('Feedback stream failed, falling back: $streamErr');
         final feedback = await _ai.getSpeakingFeedback(_recognizedText);
         if (!mounted) return;
+        _log(
+          'Feedback pipeline success (fallback): totalMs=${_ms(feedbackWatch)}, feedbackLength=${feedback.length}',
+        );
         setState(() {
           _feedbackText = feedback;
           _loadingFeedback = false;
@@ -113,11 +167,11 @@ class _SpeakPracticePageState extends State<SpeakPracticePage> {
           _loadingFeedback = false;
         });
       }
-    } catch (_) {
+    } catch (e) {
+      _log('Feedback pipeline error: totalMs=${_ms(feedbackWatch)}, error=$e');
       if (mounted) {
         setState(() {
-          _feedbackError =
-              "Couldn't get feedback right now. Please try again.";
+          _feedbackError = "Couldn't get feedback right now. Please try again.";
           _loadingFeedback = false;
         });
       }
@@ -281,8 +335,9 @@ class _FeedbackButton extends StatelessWidget {
       child: ElevatedButton(
         onPressed: enabled ? onPressed : null,
         style: ElevatedButton.styleFrom(
-          backgroundColor:
-              enabled ? const Color(0xFF8B5CF6) : const Color(0xFFB8C4E0),
+          backgroundColor: enabled
+              ? const Color(0xFF8B5CF6)
+              : const Color(0xFFB8C4E0),
           foregroundColor: Colors.white,
           padding: const EdgeInsets.symmetric(vertical: 16),
           shape: RoundedRectangleBorder(
@@ -370,7 +425,11 @@ class _ErrorCard extends StatelessWidget {
       ),
       child: Text(
         text,
-        style: const TextStyle(fontSize: 14, color: Colors.redAccent, height: 1.5),
+        style: const TextStyle(
+          fontSize: 14,
+          color: Colors.redAccent,
+          height: 1.5,
+        ),
       ),
     );
   }

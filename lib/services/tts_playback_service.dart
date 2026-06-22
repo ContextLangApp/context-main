@@ -31,19 +31,35 @@ class TtsPlaybackService {
     debugPrint('[TtsPlaybackService] $message');
   }
 
+  int _ms(Stopwatch stopwatch) => stopwatch.elapsedMilliseconds;
+
   /// Synthesizes [text] (or reuses a cached clip), plays it, and returns the
-  /// audio bytes.
+  /// audio bytes so callers can cache them for repeat playback.
   Future<Uint8List> speak(String text) async {
+    final totalWatch = Stopwatch()..start();
     final cached = _cacheGet(text);
     if (cached != null) {
-      _log('speak cacheHit=true textLength=${text.length}, bytes=${cached.length}');
+      _log(
+        'speak cacheHit=true textLength=${text.length}, bytes=${cached.length}',
+      );
       await playBytes(cached);
+      _log('speak complete (cached): totalMs=${_ms(totalWatch)}');
       return cached;
     }
-    _log('speak cacheHit=false textLength=${text.length}');
+    _log('speak start: cacheHit=false textLength=${text.length}');
+    final synthWatch = Stopwatch()..start();
     final bytes = await _azure.synthesizeSpeech(text);
+    synthWatch.stop();
+    _log(
+      'speak synthesized: synthMs=${_ms(synthWatch)}, bytes=${bytes.length}',
+    );
     _cachePut(text, bytes);
+    final playbackWatch = Stopwatch()..start();
     await playBytes(bytes);
+    playbackWatch.stop();
+    _log(
+      'speak complete: totalMs=${_ms(totalWatch)}, synthMs=${_ms(synthWatch)}, playbackStartMs=${_ms(playbackWatch)}',
+    );
     return bytes;
   }
 
@@ -64,10 +80,20 @@ class TtsPlaybackService {
 
   /// Plays already-fetched audio bytes (e.g. cached TTS output).
   Future<void> playBytes(Uint8List bytes) async {
+    final totalWatch = Stopwatch()..start();
     final tempFile = File('${Directory.systemTemp.path}/$_tempFileName');
+    final writeWatch = Stopwatch()..start();
     await tempFile.writeAsBytes(bytes);
+    writeWatch.stop();
+    final stopWatch = Stopwatch()..start();
     await _player.stop();
+    stopWatch.stop();
+    final playWatch = Stopwatch()..start();
     await _player.play(DeviceFileSource(tempFile.path));
+    playWatch.stop();
+    _log(
+      'playBytes complete: totalMs=${_ms(totalWatch)}, writeMs=${_ms(writeWatch)}, stopMs=${_ms(stopWatch)}, playStartMs=${_ms(playWatch)}, bytes=${bytes.length}, path=${tempFile.path}',
+    );
   }
 
   Future<void> stop() => _player.stop();

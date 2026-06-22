@@ -5,6 +5,8 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 }
 
+const workerStartedAt = Date.now()
+
 interface HistoryMessage {
   role: 'waiter' | 'user'
   text: string
@@ -132,7 +134,11 @@ serve(async (req) => {
   }
 
   const requestId = crypto.randomUUID()
-  console.log(`[azure-chat][${requestId}] start method=${req.method} contentType=${req.headers.get('content-type')} contentLength=${req.headers.get('content-length')}`)
+  const requestStart = Date.now()
+  const elapsed = () => Date.now() - requestStart
+  console.log(
+    `[azure-chat][${requestId}] start ts=${new Date().toISOString()} workerAgeMs=${Date.now() - workerStartedAt} method=${req.method} contentType=${req.headers.get('content-type')} contentLength=${req.headers.get('content-length')}`,
+  )
 
   try {
     // AZURE_OPENAI_ENDPOINT can be either:
@@ -154,10 +160,12 @@ serve(async (req) => {
       )
     }
 
+    const parseBodyStart = Date.now()
     const body: RequestBody = await req.json()
+    const parseBodyMs = Date.now() - parseBodyStart
     const { conversationHistory, latestUserMessage } = body
     console.log(
-      `[azure-chat][${requestId}] parsed body historyCount=${conversationHistory?.length ?? 0} latestLength=${latestUserMessage?.length ?? 0}`,
+      `[azure-chat][${requestId}] parsed body historyCount=${conversationHistory?.length ?? 0} latestLength=${latestUserMessage?.length ?? 0} parseBodyMs=${parseBodyMs} totalMs=${elapsed()}`,
     )
 
     const wantStream = body.stream === true
@@ -178,25 +186,33 @@ serve(async (req) => {
     const url = buildChatCompletionsUrl(projectEndpoint)
     console.log(`[azure-chat][${requestId}] outbound url=${url} messageCount=${messages.length} stream=${wantStream}`)
 
+    const foundryRequestBody = JSON.stringify({
+      model: deployment,
+      messages,
+      max_tokens: 800,
+      temperature: 0.7,
+      stream: wantStream,
+    })
+    const foundryRequestBytes = new TextEncoder().encode(foundryRequestBody).length
+    const foundryStart = Date.now()
     const response = await fetch(url, {
       method: 'POST',
       headers: {
         'api-key': apiKey,
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({
-        model: deployment,
-        messages,
-        max_tokens: 800,
-        temperature: 0.7,
-        stream: wantStream,
-      }),
+      body: foundryRequestBody,
     })
-    console.log(`[azure-chat][${requestId}] foundry response status=${response.status} contentType=${response.headers.get('content-type')}`)
+    console.log(
+      `[azure-chat][${requestId}] foundry response status=${response.status} foundryMs=${Date.now() - foundryStart} requestBytes=${foundryRequestBytes} totalMs=${elapsed()} contentType=${response.headers.get('content-type')}`,
+    )
 
     if (!response.ok) {
+      const errorReadStart = Date.now()
       const errorBody = await response.text()
-      console.error(`[azure-chat][${requestId}] foundry error status=${response.status} body=${errorBody.slice(0, 1500)}`)
+      console.error(
+        `[azure-chat][${requestId}] foundry error status=${response.status} errorReadMs=${Date.now() - errorReadStart} totalMs=${elapsed()} body=${errorBody.slice(0, 1500)}`,
+      )
       return new Response(
         JSON.stringify({ error: `AI Foundry error ${response.status}: ${errorBody}` }),
         { status: 502, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
@@ -214,19 +230,24 @@ serve(async (req) => {
       })
     }
 
+    const responseParseStart = Date.now()
     const result = await response.json()
+    const responseParseMs = Date.now() - responseParseStart
     const content: string = result.choices[0].message.content
-    console.log(`[azure-chat][${requestId}] foundry success contentLength=${content?.length ?? 0}`)
+    console.log(
+      `[azure-chat][${requestId}] foundry success contentLength=${content?.length ?? 0} responseParseMs=${responseParseMs} totalMs=${elapsed()}`,
+    )
+    const contentParseStart = Date.now()
     const parsed = JSON.parse(stripJsonCodeFence(content))
     console.log(
-      `[azure-chat][${requestId}] parsed JSON waiterLength=${parsed.waiterResponse?.length ?? 0} tipLength=${parsed.tip?.length ?? 0}`,
+      `[azure-chat][${requestId}] parsed JSON waiterLength=${parsed.waiterResponse?.length ?? 0} tipLength=${parsed.tip?.length ?? 0} contentParseMs=${Date.now() - contentParseStart} totalMs=${elapsed()}`,
     )
 
     return new Response(JSON.stringify(parsed), {
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     })
   } catch (err) {
-    console.error(`[azure-chat][${requestId}] unhandled error ${String(err)}`)
+    console.error(`[azure-chat][${requestId}] unhandled error totalMs=${elapsed()} error=${String(err)}`)
     return new Response(JSON.stringify({ error: String(err) }), {
       status: 500,
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
