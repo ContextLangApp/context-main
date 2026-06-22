@@ -13,11 +13,17 @@ const String _initialWaiterMessage =
 
 enum _ScenarioRole { waiter, user }
 
+/// Stages of one conversational turn, surfaced in the UI so the user always
+/// sees progress instead of a single blocking spinner.
+enum _TurnStage { idle, transcribing, thinking, streaming, speaking }
+
 class _ScenarioMessage {
   final _ScenarioRole role;
-  final String text;
 
-  const _ScenarioMessage({required this.role, required this.text});
+  // Mutable so the waiter bubble can fill in place as the reply streams in.
+  String text;
+
+  _ScenarioMessage({required this.role, required this.text});
 }
 
 class ScenarioConversationPage extends StatefulWidget {
@@ -37,10 +43,9 @@ class _ScenarioConversationPageState extends State<ScenarioConversationPage> {
   final List<_ScenarioMessage> _messages = [];
 
   bool _isRecording = false;
-  bool _loadingResponse = false;
+  _TurnStage _stage = _TurnStage.idle;
   String? _tip;
   String? _errorText;
-  Uint8List? _lastTtsBytes;
 
   @override
   void initState() {
@@ -61,8 +66,8 @@ class _ScenarioConversationPageState extends State<ScenarioConversationPage> {
   }
 
   Future<void> _toggleRecording() async {
-    if (_loadingResponse) {
-      _log('record toggle ignored: already waiting for response');
+    if (_stage != _TurnStage.idle) {
+      _log('record toggle ignored: turn in progress ($_stage)');
       return;
     }
 
@@ -122,19 +127,19 @@ class _ScenarioConversationPageState extends State<ScenarioConversationPage> {
   }
 
   Future<void> _submitAudio(Uint8List bytes) async {
-    _log('submit audio start: bytes=${bytes.length}');
-    setState(() => _loadingResponse = true);
+    final turnWatch = Stopwatch()..start();
+    _log('turn start: bytes=${bytes.length}');
+    setState(() => _stage = _TurnStage.transcribing);
 
     try {
-      _log('stage STT start');
+      // --- STT: show the user's words as soon as they're recognized. ---
       final transcript = await _azure.transcribeAudio(bytes);
-      _log('stage STT done: transcriptLength=${transcript.length}');
+      _log('STT done: sttMs=${turnWatch.elapsedMilliseconds}, len=${transcript.length}');
       if (!mounted) return;
 
       if (transcript.trim().isEmpty) {
-        _log('stage STT empty transcript');
         setState(() {
-          _loadingResponse = false;
+          _stage = _TurnStage.idle;
           _errorText = "Couldn't understand — please try again.";
         });
         return;
@@ -146,10 +151,10 @@ class _ScenarioConversationPageState extends State<ScenarioConversationPage> {
         );
         _tip = null;
         _errorText = null;
+        _stage = _TurnStage.thinking;
       });
       _scrollToBottom();
 
-      _log('stage chat start');
       final historyForService = _messages
           .sublist(0, _messages.length - 1)
           .map(
@@ -160,65 +165,104 @@ class _ScenarioConversationPageState extends State<ScenarioConversationPage> {
           )
           .toList();
 
-      final reply = await _azure.chat(
-        history: historyForService,
-        latestUserMessage: transcript,
-      );
-      _log(
-        'stage chat done: waiterLength=${reply.waiterResponse.length}, tipLength=${reply.tip.length}',
-      );
-      if (!mounted) return;
+      // --- AI: stream the reply into a live waiter bubble. ---
+      final waiterMessage = _ScenarioMessage(role: _ScenarioRole.waiter, text: '');
+      var bubbleAdded = false;
+      final buffer = StringBuffer();
+      var waiterText = '';
 
-      final waiterResponse = reply.waiterResponse.trim().isEmpty
-          ? 'Entschuldigung, könnten Sie das bitte wiederholen?'
-          : reply.waiterResponse.trim();
+      void applyStreamedText(String full) {
+        final (reply, tip) = _splitWaiterAndTip(full);
+        waiterText = reply;
+        setState(() {
+          if (!bubbleAdded && reply.isNotEmpty) {
+            _messages.add(waiterMessage);
+            bubbleAdded = true;
+            _stage = _TurnStage.streaming;
+          }
+          waiterMessage.text = reply;
+          _tip = (tip != null && tip.trim().isNotEmpty) ? tip.trim() : null;
+        });
+        _scrollToBottom();
+      }
 
-      setState(() {
-        _messages.add(
-          _ScenarioMessage(role: _ScenarioRole.waiter, text: waiterResponse),
+      try {
+        await for (final chunk in _azure.streamChat(
+          history: historyForService,
+          latestUserMessage: transcript,
+        )) {
+          if (!mounted) return;
+          buffer.write(chunk);
+          applyStreamedText(buffer.toString());
+        }
+      } catch (streamErr) {
+        // Streaming unsupported/failed — fall back to a single-shot reply.
+        _log('stream failed, falling back to non-streaming: $streamErr');
+        final reply = await _azure.chat(
+          history: historyForService,
+          latestUserMessage: transcript,
         );
-        _tip = reply.tip.trim().isEmpty ? null : reply.tip.trim();
-      });
-      _scrollToBottom();
+        if (!mounted) return;
+        applyStreamedText(
+          reply.tip.trim().isEmpty
+              ? reply.waiterResponse
+              : '${reply.waiterResponse}\nTIP: ${reply.tip}',
+        );
+      }
 
-      _log('stage TTS start');
-      final audioBytes = await _azure.synthesizeSpeech(waiterResponse);
-      _log(
-        'stage TTS done: audioBytes=${audioBytes.length}, prefix=${_bytesPreview(audioBytes)}',
-      );
-      if (!mounted) return;
+      if (waiterText.trim().isEmpty) {
+        waiterText = 'Entschuldigung, könnten Sie das bitte wiederholen?';
+        setState(() {
+          if (!bubbleAdded) {
+            _messages.add(waiterMessage);
+            bubbleAdded = true;
+          }
+          waiterMessage.text = waiterText;
+        });
+      }
+      _log('AI done: chatMs=${turnWatch.elapsedMilliseconds}, waiterLen=${waiterText.length}');
 
-      _lastTtsBytes = audioBytes;
-      setState(() => _loadingResponse = false);
-      _log('stage playback start');
-      await _tts.playBytes(audioBytes);
-      _log('stage playback requested');
+      // --- TTS: text is already on screen, so audio never blocks reading. ---
+      if (mounted) setState(() => _stage = _TurnStage.speaking);
+      try {
+        await _tts.speak(waiterText);
+      } catch (ttsErr) {
+        _log('TTS failed (non-fatal): $ttsErr');
+      }
+      _log('turn complete: totalTurnMs=${turnWatch.elapsedMilliseconds}');
+      if (mounted) setState(() => _stage = _TurnStage.idle);
     } catch (e) {
-      _log('submit audio error: $e');
+      _log('turn error: totalTurnMs=${turnWatch.elapsedMilliseconds}, error=$e');
       if (!mounted) return;
       setState(() {
         _errorText = 'Something went wrong. Please try again.';
-        _loadingResponse = false;
+        _stage = _TurnStage.idle;
       });
     }
   }
 
+  /// Splits streamed reply text into (waiterReply, tip) on the first line that
+  /// starts with `TIP:`. Before the marker arrives, everything is the reply.
+  (String, String?) _splitWaiterAndTip(String text) {
+    final match = RegExp(
+      r'(?:^|\n)\s*TIP:\s*',
+      caseSensitive: false,
+    ).firstMatch(text);
+    if (match == null) return (text.trimRight(), null);
+    final reply = text.substring(0, match.start).trimRight();
+    final tip = text.substring(match.end).trim();
+    return (reply, tip.isEmpty ? null : tip);
+  }
+
   Future<void> _speakLatestWaiterMessage() async {
-    if (_lastTtsBytes != null) {
-      _log('repeat waiter: using cached audio bytes=${_lastTtsBytes!.length}');
-      await _tts.playBytes(_lastTtsBytes!);
-      return;
-    }
     final text = _latestWaiterMessage;
-    if (text == null) {
+    if (text == null || text.trim().isEmpty) {
       _log('repeat waiter ignored: no waiter message');
       return;
     }
     try {
-      _log('repeat waiter: fetching TTS for latest waiter message');
-      final bytes = await _tts.speak(text);
-      if (!mounted) return;
-      _lastTtsBytes = bytes;
+      // Cache hit if this line was already synthesized this turn.
+      await _tts.speak(text);
     } catch (e) {
       _log('repeat waiter error: $e');
       if (!mounted) return;
@@ -228,11 +272,7 @@ class _ScenarioConversationPageState extends State<ScenarioConversationPage> {
 
   Future<void> _speakInitialMessage() async {
     try {
-      _log('initial TTS start');
-      final bytes = await _tts.speak(_initialWaiterMessage);
-      _log('initial TTS done: bytes=${bytes.length}');
-      if (!mounted) return;
-      _lastTtsBytes = bytes;
+      await _tts.speak(_initialWaiterMessage);
     } catch (e) {
       _log('initial TTS error: $e');
       if (!mounted) return;
@@ -256,16 +296,15 @@ class _ScenarioConversationPageState extends State<ScenarioConversationPage> {
       _messages
         ..clear()
         ..add(
-          const _ScenarioMessage(
+          _ScenarioMessage(
             role: _ScenarioRole.waiter,
             text: _initialWaiterMessage,
           ),
         );
       _isRecording = false;
-      _loadingResponse = false;
+      _stage = _TurnStage.idle;
       _tip = null;
       _errorText = null;
-      _lastTtsBytes = null;
     });
     _scrollToBottom();
 
@@ -281,6 +320,21 @@ class _ScenarioConversationPageState extends State<ScenarioConversationPage> {
         curve: Curves.easeOut,
       );
     });
+  }
+
+  String _statusLabel() {
+    switch (_stage) {
+      case _TurnStage.transcribing:
+        return 'Transcribing…';
+      case _TurnStage.thinking:
+        return 'Waiter is thinking…';
+      case _TurnStage.streaming:
+        return 'Waiter is replying…';
+      case _TurnStage.speaking:
+        return 'Speaking…';
+      case _TurnStage.idle:
+        return _isRecording ? 'Recording…' : 'Tap to speak';
+    }
   }
 
   @override
@@ -310,7 +364,7 @@ class _ScenarioConversationPageState extends State<ScenarioConversationPage> {
                     const SizedBox(height: 16),
                     _ChatCard(
                       messages: _messages,
-                      loadingResponse: _loadingResponse,
+                      thinking: _stage == _TurnStage.thinking,
                       isRecording: _isRecording,
                     ),
                     if (_tip != null) ...[
@@ -327,7 +381,8 @@ class _ScenarioConversationPageState extends State<ScenarioConversationPage> {
             ),
             _BottomControls(
               isRecording: _isRecording,
-              loadingResponse: _loadingResponse,
+              busy: _stage != _TurnStage.idle,
+              statusLabel: _statusLabel(),
               onMicPressed: _toggleRecording,
               onRepeatPressed: _speakLatestWaiterMessage,
               onClearPressed: () => _resetScenario(speak: true),
@@ -440,12 +495,12 @@ class _RoleChip extends StatelessWidget {
 
 class _ChatCard extends StatelessWidget {
   final List<_ScenarioMessage> messages;
-  final bool loadingResponse;
+  final bool thinking;
   final bool isRecording;
 
   const _ChatCard({
     required this.messages,
-    required this.loadingResponse,
+    required this.thinking,
     required this.isRecording,
   });
 
@@ -469,7 +524,7 @@ class _ChatCard extends StatelessWidget {
             const _RecordingBubble(),
             const SizedBox(height: 12),
           ],
-          if (loadingResponse)
+          if (thinking)
             const Align(
               alignment: Alignment.centerLeft,
               child: SizedBox(
@@ -619,14 +674,16 @@ class _ErrorCard extends StatelessWidget {
 
 class _BottomControls extends StatelessWidget {
   final bool isRecording;
-  final bool loadingResponse;
+  final bool busy;
+  final String statusLabel;
   final VoidCallback onMicPressed;
   final VoidCallback onRepeatPressed;
   final VoidCallback onClearPressed;
 
   const _BottomControls({
     required this.isRecording,
-    required this.loadingResponse,
+    required this.busy,
+    required this.statusLabel,
     required this.onMicPressed,
     required this.onRepeatPressed,
     required this.onClearPressed,
@@ -634,7 +691,9 @@ class _BottomControls extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final micEnabled = !loadingResponse;
+    // Mic is enabled to start/stop recording; disabled only while a turn is
+    // being processed (and not currently recording).
+    final micEnabled = isRecording || !busy;
     return Container(
       padding: const EdgeInsets.fromLTRB(16, 8, 16, 28),
       color: const Color(0xFFEFF3F7),
@@ -642,11 +701,7 @@ class _BottomControls extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         children: [
           Text(
-            isRecording
-                ? 'Recording...'
-                : loadingResponse
-                ? 'Waiter is replying...'
-                : 'Tap to speak',
+            statusLabel,
             style: const TextStyle(fontSize: 12, color: Colors.black54),
           ),
           const SizedBox(height: 12),

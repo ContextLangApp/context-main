@@ -82,11 +82,34 @@ class _SpeakPracticePageState extends State<SpeakPracticePage> {
       _feedbackText = null;
       _feedbackError = null;
     });
+    final buffer = StringBuffer();
     try {
-      final feedback = await _ai.getSpeakingFeedback(_recognizedText);
-      if (mounted) {
+      try {
+        // Stream the feedback so it appears word-by-word.
+        await for (final chunk in _ai.streamSpeakingFeedback(_recognizedText)) {
+          if (!mounted) return;
+          buffer.write(chunk);
+          setState(() {
+            _feedbackText = buffer.toString();
+            _loadingFeedback = false;
+          });
+        }
+      } catch (_) {
+        // Streaming unsupported/failed — fall back to a single-shot reply.
+        final feedback = await _ai.getSpeakingFeedback(_recognizedText);
+        if (!mounted) return;
         setState(() {
           _feedbackText = feedback;
+          _loadingFeedback = false;
+        });
+      }
+
+      if (mounted &&
+          (_feedbackText == null || _feedbackText!.trim().isEmpty)) {
+        setState(() {
+          _feedbackError =
+              "Couldn't get feedback right now. Please try again.";
+          _feedbackText = null;
           _loadingFeedback = false;
         });
       }

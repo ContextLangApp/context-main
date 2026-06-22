@@ -7,6 +7,7 @@ const corsHeaders = {
 
 interface RequestBody {
   transcript: string
+  stream?: boolean
 }
 
 const SYSTEM_PROMPT = `You are a friendly German tutor giving feedback on what a learner just said in German.
@@ -19,6 +20,12 @@ You MUST respond with valid JSON in exactly this format, with no additional text
 }
 
 Return ONLY the raw JSON object. Do not wrap it in markdown code fences and do not add any other text.`
+
+// Streaming mode emits plain feedback text (no JSON envelope) so it can render
+// token-by-token in the client.
+const STREAM_SYSTEM_PROMPT = `You are a friendly German tutor giving feedback on what a learner just said in German.
+Reply briefly in plain text. Correct the major mistakes, explain them in simple English, and give one improved German version of what they tried to say. Be encouraging and concise.
+Output only the feedback text. No JSON, no markdown, no code fences.`
 
 // Some Azure AI Foundry (Grok) deployments wrap JSON in ```json fences even
 // when asked not to. Strip them before parsing.
@@ -47,6 +54,64 @@ function buildChatCompletionsUrl(endpoint: string): string {
   }
 
   return `${normalized}/openai/v1/chat/completions`
+}
+
+// Transforms Foundry's OpenAI-style SSE (`data: {chunk}` lines) into a plain
+// UTF-8 text stream of just the content deltas. Logs server-side TTFT.
+function sseToTextStream(
+  source: ReadableStream<Uint8Array>,
+  requestId: string,
+  tag: string,
+): ReadableStream<Uint8Array> {
+  const reader = source.getReader()
+  const decoder = new TextDecoder()
+  const encoder = new TextEncoder()
+  const startedAt = Date.now()
+  let firstDeltaAt = 0
+
+  return new ReadableStream({
+    async start(controller) {
+      let buffer = ''
+      try {
+        outer: while (true) {
+          const { done, value } = await reader.read()
+          if (done) break
+          buffer += decoder.decode(value, { stream: true })
+          const lines = buffer.split('\n')
+          buffer = lines.pop() ?? ''
+          for (const line of lines) {
+            const trimmed = line.trim()
+            if (!trimmed.startsWith('data:')) continue
+            const data = trimmed.slice(5).trim()
+            if (data === '[DONE]') break outer
+            try {
+              const json = JSON.parse(data)
+              const delta = json.choices?.[0]?.delta?.content
+              if (typeof delta === 'string' && delta.length > 0) {
+                if (firstDeltaAt === 0) {
+                  firstDeltaAt = Date.now()
+                  console.log(`[${tag}][${requestId}] first delta ttftMs=${firstDeltaAt - startedAt}`)
+                }
+                controller.enqueue(encoder.encode(delta))
+              }
+            } catch (_) {
+              // Ignore keepalives / non-JSON data lines.
+            }
+          }
+        }
+      } catch (err) {
+        console.error(`[${tag}][${requestId}] stream pump error ${String(err)}`)
+      } finally {
+        console.log(
+          `[${tag}][${requestId}] stream complete totalMs=${Date.now() - startedAt} ttftMs=${firstDeltaAt ? firstDeltaAt - startedAt : -1}`,
+        )
+        controller.close()
+      }
+    },
+    cancel(reason) {
+      reader.cancel(reason)
+    },
+  })
 }
 
 serve(async (req) => {
@@ -85,13 +150,14 @@ serve(async (req) => {
       )
     }
 
+    const wantStream = body.stream === true
     const messages = [
-      { role: 'system', content: SYSTEM_PROMPT },
+      { role: 'system', content: wantStream ? STREAM_SYSTEM_PROMPT : SYSTEM_PROMPT },
       { role: 'user', content: `The learner said: "${transcript}"` },
     ]
 
     const url = buildChatCompletionsUrl(projectEndpoint)
-    console.log(`[speaking-feedback][${requestId}] outbound url=${url}`)
+    console.log(`[speaking-feedback][${requestId}] outbound url=${url} stream=${wantStream}`)
 
     const response = await fetch(url, {
       method: 'POST',
@@ -104,6 +170,7 @@ serve(async (req) => {
         messages,
         max_tokens: 500,
         temperature: 0.5,
+        stream: wantStream,
       }),
     })
     console.log(`[speaking-feedback][${requestId}] foundry response status=${response.status} contentType=${response.headers.get('content-type')}`)
@@ -115,6 +182,17 @@ serve(async (req) => {
         JSON.stringify({ error: `AI Foundry error ${response.status}: ${errorBody}` }),
         { status: 502, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
       )
+    }
+
+    if (wantStream && response.body) {
+      console.log(`[speaking-feedback][${requestId}] streaming response to client`)
+      return new Response(sseToTextStream(response.body, requestId, 'speaking-feedback'), {
+        headers: {
+          ...corsHeaders,
+          'Content-Type': 'text/plain; charset=utf-8',
+          'Cache-Control': 'no-cache',
+        },
+      })
     }
 
     const result = await response.json()

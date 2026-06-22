@@ -170,6 +170,74 @@ class AzureAiService {
     return feedback;
   }
 
+  /// Streams an AI reply as plain-text chunks from a streaming edge function.
+  /// Yields text deltas as they arrive; logs time-to-first-chunk (ttftMs).
+  Stream<String> _streamPost(
+    String path,
+    Map<String, dynamic> payload,
+    String label,
+  ) async* {
+    _log('$label stream start: auth=$_authMode');
+    final client = http.Client();
+    final stopwatch = Stopwatch()..start();
+    var firstChunkLogged = false;
+    try {
+      final request = http.Request('POST', Uri.parse('$_functionsBase/$path'))
+        ..headers['Authorization'] = _authHeader
+        ..headers['Content-Type'] = 'application/json'
+        ..body = jsonEncode(payload);
+      final response = await client.send(request);
+      _log('$label stream response: status=${response.statusCode}');
+
+      if (response.statusCode != 200) {
+        final body = await response.stream.bytesToString();
+        _log('$label stream failure body: ${_bodyPreview(body)}');
+        throw Exception('$label failed (${response.statusCode}): $body');
+      }
+
+      await for (final chunk in response.stream.transform(utf8.decoder)) {
+        if (chunk.isEmpty) continue;
+        if (!firstChunkLogged) {
+          firstChunkLogged = true;
+          _log('$label first chunk: ttftMs=${stopwatch.elapsedMilliseconds}');
+        }
+        yield chunk;
+      }
+      _log('$label stream complete: streamTotalMs=${stopwatch.elapsedMilliseconds}');
+    } finally {
+      client.close();
+    }
+  }
+
+  /// Streaming variant of [chat]. Yields the waiter reply as plain-text chunks,
+  /// followed by a line starting with `TIP:` (the caller splits on it).
+  Stream<String> streamChat({
+    required List<({String role, String text})> history,
+    required String latestUserMessage,
+  }) {
+    final historyJson = history
+        .map((m) => {'role': m.role, 'text': m.text})
+        .toList();
+    return _streamPost(
+      'azure-chat',
+      {
+        'conversationHistory': historyJson,
+        'latestUserMessage': latestUserMessage,
+        'stream': true,
+      },
+      'Chat',
+    );
+  }
+
+  /// Streaming variant of [getSpeakingFeedback]. Yields feedback text chunks.
+  Stream<String> streamSpeakingFeedback(String transcript) {
+    return _streamPost(
+      'speaking-feedback',
+      {'transcript': transcript, 'stream': true},
+      'Feedback',
+    );
+  }
+
   Future<Map<String, dynamic>> enrichVocabulary({
     required String word,
     required String sourceContext,
