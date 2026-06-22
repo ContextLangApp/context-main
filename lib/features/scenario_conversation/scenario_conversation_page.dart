@@ -53,6 +53,8 @@ class _ScenarioConversationPageState extends State<ScenarioConversationPage> {
     debugPrint('[ScenarioConversationPage] $message');
   }
 
+  int _ms(Stopwatch stopwatch) => stopwatch.elapsedMilliseconds;
+
   String _bytesPreview(Uint8List bytes) {
     return bytes
         .take(12)
@@ -67,22 +69,27 @@ class _ScenarioConversationPageState extends State<ScenarioConversationPage> {
     }
 
     if (_isRecording) {
-      _log('record stop requested');
+      final stopTurnWatch = Stopwatch()..start();
+      _log('record stop requested: ts=${DateTime.now().toIso8601String()}');
       setState(() => _isRecording = false);
+      final stopWatch = Stopwatch()..start();
       final path = await _recorder.stop();
-      _log('record stop completed: path=$path');
+      stopWatch.stop();
+      _log('record stop completed: stopMs=${_ms(stopWatch)}, path=$path');
       if (path == null) {
-        _log('record stop returned null path');
+        _log('record stop returned null path: turnMs=${_ms(stopTurnWatch)}');
         return;
       }
       final file = File(path);
+      final readWatch = Stopwatch()..start();
       final exists = await file.exists();
       final bytes = exists ? await file.readAsBytes() : Uint8List(0);
+      readWatch.stop();
       _log(
-        'record file: exists=$exists, bytes=${bytes.length}, prefix=${_bytesPreview(bytes)}',
+        'record file read: readMs=${_ms(readWatch)}, turnMs=${_ms(stopTurnWatch)}, exists=$exists, bytes=${bytes.length}, prefix=${_bytesPreview(bytes)}',
       );
       if (bytes.isNotEmpty) {
-        await _submitAudio(bytes);
+        await _submitAudio(bytes, upstreamMs: _ms(stopTurnWatch));
       } else {
         setState(() => _errorText = 'Recording produced no audio bytes.');
       }
@@ -108,8 +115,9 @@ class _ScenarioConversationPageState extends State<ScenarioConversationPage> {
 
     final tempPath = '${Directory.systemTemp.path}/scenario_recording.wav';
     _log(
-      'record start: path=$tempPath, encoder=wav, sampleRate=16000, channels=1',
+      'record start: ts=${DateTime.now().toIso8601String()}, path=$tempPath, encoder=wav, sampleRate=16000, channels=1',
     );
+    final startWatch = Stopwatch()..start();
     await _recorder.start(
       const RecordConfig(
         encoder: AudioEncoder.wav,
@@ -118,21 +126,31 @@ class _ScenarioConversationPageState extends State<ScenarioConversationPage> {
       ),
       path: tempPath,
     );
-    _log('record start completed');
+    startWatch.stop();
+    _log('record start completed: startMs=${_ms(startWatch)}');
   }
 
-  Future<void> _submitAudio(Uint8List bytes) async {
-    _log('submit audio start: bytes=${bytes.length}');
+  Future<void> _submitAudio(Uint8List bytes, {int upstreamMs = 0}) async {
+    final turnWatch = Stopwatch()..start();
+    _log(
+      'turn pipeline start: ts=${DateTime.now().toIso8601String()}, upstreamRecordStopReadMs=$upstreamMs, audioBytes=${bytes.length}',
+    );
     setState(() => _loadingResponse = true);
 
     try {
-      _log('stage STT start');
+      _log('stage STT start: elapsedMs=${_ms(turnWatch)}');
+      final sttWatch = Stopwatch()..start();
       final transcript = await _azure.transcribeAudio(bytes);
-      _log('stage STT done: transcriptLength=${transcript.length}');
+      sttWatch.stop();
+      _log(
+        'stage STT done: sttMs=${_ms(sttWatch)}, elapsedMs=${_ms(turnWatch)}, transcriptLength=${transcript.length}',
+      );
       if (!mounted) return;
 
       if (transcript.trim().isEmpty) {
-        _log('stage STT empty transcript');
+        _log(
+          'stage STT empty transcript: totalTurnMs=${_ms(turnWatch)}, upstreamRecordStopReadMs=$upstreamMs, sttMs=${_ms(sttWatch)}',
+        );
         setState(() {
           _loadingResponse = false;
           _errorText = "Couldn't understand — please try again.";
@@ -140,6 +158,7 @@ class _ScenarioConversationPageState extends State<ScenarioConversationPage> {
         return;
       }
 
+      final transcriptUiWatch = Stopwatch()..start();
       setState(() {
         _messages.add(
           _ScenarioMessage(role: _ScenarioRole.user, text: transcript),
@@ -148,8 +167,12 @@ class _ScenarioConversationPageState extends State<ScenarioConversationPage> {
         _errorText = null;
       });
       _scrollToBottom();
+      transcriptUiWatch.stop();
+      _log(
+        'stage user transcript UI update: uiMs=${_ms(transcriptUiWatch)}, elapsedMs=${_ms(turnWatch)}',
+      );
 
-      _log('stage chat start');
+      _log('stage chat start: elapsedMs=${_ms(turnWatch)}');
       final historyForService = _messages
           .sublist(0, _messages.length - 1)
           .map(
@@ -160,12 +183,14 @@ class _ScenarioConversationPageState extends State<ScenarioConversationPage> {
           )
           .toList();
 
+      final chatWatch = Stopwatch()..start();
       final reply = await _azure.chat(
         history: historyForService,
         latestUserMessage: transcript,
       );
+      chatWatch.stop();
       _log(
-        'stage chat done: waiterLength=${reply.waiterResponse.length}, tipLength=${reply.tip.length}',
+        'stage chat done: chatMs=${_ms(chatWatch)}, elapsedMs=${_ms(turnWatch)}, waiterLength=${reply.waiterResponse.length}, tipLength=${reply.tip.length}',
       );
       if (!mounted) return;
 
@@ -173,6 +198,7 @@ class _ScenarioConversationPageState extends State<ScenarioConversationPage> {
           ? 'Entschuldigung, könnten Sie das bitte wiederholen?'
           : reply.waiterResponse.trim();
 
+      final waiterUiWatch = Stopwatch()..start();
       setState(() {
         _messages.add(
           _ScenarioMessage(role: _ScenarioRole.waiter, text: waiterResponse),
@@ -180,21 +206,33 @@ class _ScenarioConversationPageState extends State<ScenarioConversationPage> {
         _tip = reply.tip.trim().isEmpty ? null : reply.tip.trim();
       });
       _scrollToBottom();
-
-      _log('stage TTS start');
-      final audioBytes = await _azure.synthesizeSpeech(waiterResponse);
+      waiterUiWatch.stop();
       _log(
-        'stage TTS done: audioBytes=${audioBytes.length}, prefix=${_bytesPreview(audioBytes)}',
+        'stage waiter UI update: uiMs=${_ms(waiterUiWatch)}, elapsedMs=${_ms(turnWatch)}',
+      );
+
+      _log('stage TTS start: elapsedMs=${_ms(turnWatch)}');
+      final ttsWatch = Stopwatch()..start();
+      final audioBytes = await _azure.synthesizeSpeech(waiterResponse);
+      ttsWatch.stop();
+      _log(
+        'stage TTS done: ttsMs=${_ms(ttsWatch)}, elapsedMs=${_ms(turnWatch)}, audioBytes=${audioBytes.length}, prefix=${_bytesPreview(audioBytes)}',
       );
       if (!mounted) return;
 
       _lastTtsBytes = audioBytes;
       setState(() => _loadingResponse = false);
-      _log('stage playback start');
+      _log('stage playback start: elapsedMs=${_ms(turnWatch)}');
+      final playbackWatch = Stopwatch()..start();
       await _tts.playBytes(audioBytes);
-      _log('stage playback requested');
+      playbackWatch.stop();
+      _log(
+        'turn pipeline complete: totalTurnMs=${_ms(turnWatch)}, upstreamRecordStopReadMs=$upstreamMs, sttMs=${_ms(sttWatch)}, chatMs=${_ms(chatWatch)}, ttsMs=${_ms(ttsWatch)}, playbackStartMs=${_ms(playbackWatch)}',
+      );
     } catch (e) {
-      _log('submit audio error: $e');
+      _log(
+        'submit audio error: totalTurnMs=${_ms(turnWatch)}, upstreamRecordStopReadMs=$upstreamMs, error=$e',
+      );
       if (!mounted) return;
       setState(() {
         _errorText = 'Something went wrong. Please try again.';
@@ -204,9 +242,15 @@ class _ScenarioConversationPageState extends State<ScenarioConversationPage> {
   }
 
   Future<void> _speakLatestWaiterMessage() async {
+    final repeatWatch = Stopwatch()..start();
     if (_lastTtsBytes != null) {
-      _log('repeat waiter: using cached audio bytes=${_lastTtsBytes!.length}');
+      _log(
+        'repeat waiter: cached playback start, bytes=${_lastTtsBytes!.length}',
+      );
       await _tts.playBytes(_lastTtsBytes!);
+      _log(
+        'repeat waiter: cached playback requested, totalMs=${_ms(repeatWatch)}',
+      );
       return;
     }
     final text = _latestWaiterMessage;
@@ -219,22 +263,28 @@ class _ScenarioConversationPageState extends State<ScenarioConversationPage> {
       final bytes = await _tts.speak(text);
       if (!mounted) return;
       _lastTtsBytes = bytes;
+      _log(
+        'repeat waiter: fetched and playback requested, totalMs=${_ms(repeatWatch)}, bytes=${bytes.length}',
+      );
     } catch (e) {
-      _log('repeat waiter error: $e');
+      _log('repeat waiter error: totalMs=${_ms(repeatWatch)}, error=$e');
       if (!mounted) return;
       setState(() => _errorText = "Couldn't play the audio. Please try again.");
     }
   }
 
   Future<void> _speakInitialMessage() async {
+    final initialWatch = Stopwatch()..start();
     try {
-      _log('initial TTS start');
+      _log('initial TTS start: ts=${DateTime.now().toIso8601String()}');
       final bytes = await _tts.speak(_initialWaiterMessage);
-      _log('initial TTS done: bytes=${bytes.length}');
+      _log(
+        'initial TTS done: totalMs=${_ms(initialWatch)}, bytes=${bytes.length}',
+      );
       if (!mounted) return;
       _lastTtsBytes = bytes;
     } catch (e) {
-      _log('initial TTS error: $e');
+      _log('initial TTS error: totalMs=${_ms(initialWatch)}, error=$e');
       if (!mounted) return;
       setState(() => _errorText = "Couldn't load the audio. Please try again.");
     }

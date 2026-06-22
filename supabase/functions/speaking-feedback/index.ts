@@ -5,6 +5,8 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 }
 
+const workerStartedAt = Date.now()
+
 interface RequestBody {
   transcript: string
 }
@@ -55,7 +57,11 @@ serve(async (req) => {
   }
 
   const requestId = crypto.randomUUID()
-  console.log(`[speaking-feedback][${requestId}] start method=${req.method} contentType=${req.headers.get('content-type')} contentLength=${req.headers.get('content-length')}`)
+  const requestStart = Date.now()
+  const elapsed = () => Date.now() - requestStart
+  console.log(
+    `[speaking-feedback][${requestId}] start ts=${new Date().toISOString()} workerAgeMs=${Date.now() - workerStartedAt} method=${req.method} contentType=${req.headers.get('content-type')} contentLength=${req.headers.get('content-length')}`,
+  )
 
   try {
     const projectEndpoint = Deno.env.get('AZURE_OPENAI_ENDPOINT')
@@ -73,9 +79,12 @@ serve(async (req) => {
       )
     }
 
+    const parseBodyStart = Date.now()
     const body: RequestBody = await req.json()
     const transcript = typeof body.transcript === 'string' ? body.transcript.trim() : ''
-    console.log(`[speaking-feedback][${requestId}] parsed body transcriptLength=${transcript.length}`)
+    console.log(
+      `[speaking-feedback][${requestId}] parsed body transcriptLength=${transcript.length} parseBodyMs=${Date.now() - parseBodyStart} totalMs=${elapsed()}`,
+    )
 
     if (transcript.length === 0) {
       console.error(`[speaking-feedback][${requestId}] missing transcript field`)
@@ -93,43 +102,56 @@ serve(async (req) => {
     const url = buildChatCompletionsUrl(projectEndpoint)
     console.log(`[speaking-feedback][${requestId}] outbound url=${url}`)
 
+    const foundryRequestBody = JSON.stringify({
+      model: deployment,
+      messages,
+      max_tokens: 500,
+      temperature: 0.5,
+    })
+    const foundryRequestBytes = new TextEncoder().encode(foundryRequestBody).length
+    const foundryStart = Date.now()
     const response = await fetch(url, {
       method: 'POST',
       headers: {
         'api-key': apiKey,
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({
-        model: deployment,
-        messages,
-        max_tokens: 500,
-        temperature: 0.5,
-      }),
+      body: foundryRequestBody,
     })
-    console.log(`[speaking-feedback][${requestId}] foundry response status=${response.status} contentType=${response.headers.get('content-type')}`)
+    console.log(
+      `[speaking-feedback][${requestId}] foundry response status=${response.status} foundryMs=${Date.now() - foundryStart} requestBytes=${foundryRequestBytes} totalMs=${elapsed()} contentType=${response.headers.get('content-type')}`,
+    )
 
     if (!response.ok) {
+      const errorReadStart = Date.now()
       const errorBody = await response.text()
-      console.error(`[speaking-feedback][${requestId}] foundry error status=${response.status} body=${errorBody.slice(0, 1500)}`)
+      console.error(
+        `[speaking-feedback][${requestId}] foundry error status=${response.status} errorReadMs=${Date.now() - errorReadStart} totalMs=${elapsed()} body=${errorBody.slice(0, 1500)}`,
+      )
       return new Response(
         JSON.stringify({ error: `AI Foundry error ${response.status}: ${errorBody}` }),
         { status: 502, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
       )
     }
 
+    const responseParseStart = Date.now()
     const result = await response.json()
+    const responseParseMs = Date.now() - responseParseStart
     const content: string = result.choices[0].message.content
-    console.log(`[speaking-feedback][${requestId}] foundry success contentLength=${content?.length ?? 0}`)
+    console.log(
+      `[speaking-feedback][${requestId}] foundry success contentLength=${content?.length ?? 0} responseParseMs=${responseParseMs} totalMs=${elapsed()}`,
+    )
+    const contentParseStart = Date.now()
     const parsed = JSON.parse(stripJsonCodeFence(content))
     console.log(
-      `[speaking-feedback][${requestId}] parsed JSON feedbackLength=${parsed.feedback?.length ?? 0}`,
+      `[speaking-feedback][${requestId}] parsed JSON feedbackLength=${parsed.feedback?.length ?? 0} contentParseMs=${Date.now() - contentParseStart} totalMs=${elapsed()}`,
     )
 
     return new Response(JSON.stringify(parsed), {
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     })
   } catch (err) {
-    console.error(`[speaking-feedback][${requestId}] unhandled error ${String(err)}`)
+    console.error(`[speaking-feedback][${requestId}] unhandled error totalMs=${elapsed()} error=${String(err)}`)
     return new Response(JSON.stringify({ error: String(err) }), {
       status: 500,
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },

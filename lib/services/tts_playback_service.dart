@@ -1,7 +1,6 @@
 import 'dart:io';
-import 'dart:typed_data';
-
 import 'package:audioplayers/audioplayers.dart';
+import 'package:flutter/foundation.dart';
 
 import 'azure_ai_service.dart';
 
@@ -18,20 +17,48 @@ class TtsPlaybackService {
   final String _tempFileName =
       'tts_${DateTime.now().microsecondsSinceEpoch}.mp3';
 
+  void _log(String message) {
+    debugPrint('[TtsPlaybackService] $message');
+  }
+
+  int _ms(Stopwatch stopwatch) => stopwatch.elapsedMilliseconds;
+
   /// Synthesizes [text], plays it, and returns the audio bytes so callers can
   /// cache them for repeat playback without another network call.
   Future<Uint8List> speak(String text) async {
+    final totalWatch = Stopwatch()..start();
+    _log('speak start: textLength=${text.length}');
+    final synthWatch = Stopwatch()..start();
     final bytes = await _azure.synthesizeSpeech(text);
+    synthWatch.stop();
+    _log(
+      'speak synthesized: synthMs=${_ms(synthWatch)}, bytes=${bytes.length}',
+    );
+    final playbackWatch = Stopwatch()..start();
     await playBytes(bytes);
+    playbackWatch.stop();
+    _log(
+      'speak complete: totalMs=${_ms(totalWatch)}, synthMs=${_ms(synthWatch)}, playbackStartMs=${_ms(playbackWatch)}',
+    );
     return bytes;
   }
 
   /// Plays already-fetched audio bytes (e.g. cached TTS output).
   Future<void> playBytes(Uint8List bytes) async {
+    final totalWatch = Stopwatch()..start();
     final tempFile = File('${Directory.systemTemp.path}/$_tempFileName');
+    final writeWatch = Stopwatch()..start();
     await tempFile.writeAsBytes(bytes);
+    writeWatch.stop();
+    final stopWatch = Stopwatch()..start();
     await _player.stop();
+    stopWatch.stop();
+    final playWatch = Stopwatch()..start();
     await _player.play(DeviceFileSource(tempFile.path));
+    playWatch.stop();
+    _log(
+      'playBytes complete: totalMs=${_ms(totalWatch)}, writeMs=${_ms(writeWatch)}, stopMs=${_ms(stopWatch)}, playStartMs=${_ms(playWatch)}, bytes=${bytes.length}, path=${tempFile.path}',
+    );
   }
 
   Future<void> stop() => _player.stop();
